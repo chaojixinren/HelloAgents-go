@@ -11,23 +11,16 @@ import (
 	"helloagents-go/HelloAgents-go/tools"
 )
 
-// SimpleAgent is a basic conversational agent with optional tool calling support.
-// It uses a custom tool call format: [TOOL_CALL:tool_name:parameters]
-// 继承 HelloAgentsLLM 及其他基础字段，与 Python 版本保持一致
+// SimpleAgent 是简单的对话 Agent，支持可选的工具调用。
+// 使用自定义工具调用格式: [TOOL_CALL:tool_name:parameters]
+// 嵌入 BaseAgent 以获得基础字段和方法，与 Python 继承 Agent 对应。
 type SimpleAgent struct {
-	// 基础字段（与 Python Agent 基类对应）
-	Name         string
-	LLM          *core.HelloAgentsLLM
-	SystemPrompt string
-	Config       *core.Config
-	history      []core.Message
-
-	// SimpleAgent 特有字段
+	*core.BaseAgent
 	toolRegistry      *tools.ToolRegistry
 	enableToolCalling bool
 }
 
-// NewSimpleAgent creates a new SimpleAgent.
+// NewSimpleAgent 创建 SimpleAgent。
 func NewSimpleAgent(
 	name string,
 	llm *core.HelloAgentsLLM,
@@ -35,57 +28,28 @@ func NewSimpleAgent(
 	toolRegistry *tools.ToolRegistry,
 ) *SimpleAgent {
 	return &SimpleAgent{
-		Name:              name,
-		LLM:               llm,
-		SystemPrompt:      systemPrompt,
-		Config:            core.DefaultConfig(),
-		history:           make([]core.Message, 0),
+		BaseAgent:         core.NewBaseAgent(name, llm, systemPrompt, nil),
 		toolRegistry:      toolRegistry,
 		enableToolCalling: toolRegistry != nil,
 	}
 }
 
-// AddMessage 添加消息到历史记录，与 Python 的 add_message 对应。
-func (a *SimpleAgent) AddMessage(m core.Message) {
-	a.history = append(a.history, m)
-}
-
-// ClearHistory 清空历史记录，与 Python 的 clear_history 对应。
-func (a *SimpleAgent) ClearHistory() {
-	a.history = a.history[:0]
-}
-
-// GetHistory 返回历史记录的副本，与 Python 的 get_history 对应。
-func (a *SimpleAgent) GetHistory() []core.Message {
-	out := make([]core.Message, len(a.history))
-	copy(out, a.history)
-	return out
-}
-
-// String 实现 fmt.Stringer，与 Python 的 __str__ 对应。
-func (a *SimpleAgent) String() string {
-	if a.LLM != nil {
-		return fmt.Sprintf("Agent(name=%s, provider=%s)", a.Name, a.LLM.Provider)
-	}
-	return fmt.Sprintf("Agent(name=%s, provider=)", a.Name)
-}
-
-// Run executes the agent with the given input.
+// Run 执行 Agent。
 func (a *SimpleAgent) Run(ctx context.Context, inputText string) (string, error) {
-	// Build messages
+	// 构建消息列表
 	messages := []core.ChatMessage{
 		{Role: core.RoleSystem, Content: a.SystemPrompt},
 	}
 
-	// Add history
+	// 添加历史消息
 	for _, msg := range a.GetHistory() {
 		messages = append(messages, msg.ToChatMessage())
 	}
 
-	// Add current input
+	// 添加当前输入
 	messages = append(messages, core.ChatMessage{Role: core.RoleUser, Content: inputText})
 
-	// If tool calling is enabled, add tool descriptions to system prompt
+	// 如果启用工具调用，添加工具描述到系统提示
 	if a.enableToolCalling && a.toolRegistry.Count() > 0 {
 		toolDesc := a.toolRegistry.GetToolsDescription()
 		messages[0] = core.ChatMessage{
@@ -94,175 +58,182 @@ func (a *SimpleAgent) Run(ctx context.Context, inputText string) (string, error)
 		}
 	}
 
-	// Invoke LLM
+	// 调用 LLM
 	response, err := a.LLM.Invoke(ctx, messages, nil)
 	if err != nil {
-		return "", fmt.Errorf("LLM invocation failed: %w", err)
+		return "", fmt.Errorf("LLM 调用失败: %w", err)
 	}
 
-	// Process tool calls if enabled
+	// 处理工具调用
 	if a.enableToolCalling {
 		response, err = a.processToolCalls(response)
 		if err != nil {
-			return "", fmt.Errorf("tool call processing failed: %w", err)
+			return "", fmt.Errorf("工具调用处理失败: %w", err)
 		}
 	}
 
-	// Add messages to history
+	// 添加消息到历史记录
 	a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
 	a.AddMessage(core.NewMessage(response, core.RoleAssistant, core.Time{}, nil))
 
 	return response, nil
 }
 
-// processToolCalls processes any tool calls in the response.
+// processToolCalls 处理响应中的工具调用。
 func (a *SimpleAgent) processToolCalls(response string) (string, error) {
-	maxIterations := 10 // Prevent infinite loops
+	maxIterations := 10
 	iterations := 0
 
 	for iterations < maxIterations {
 		iterations++
 
-		// Check if there's a tool call
+		// 检查是否有工具调用
 		toolName, paramsStr, found := tools.ParseToolCall(response)
 		if !found {
 			break
 		}
 
-		// Parse parameters
+		// 解析参数
 		var params map[string]interface{}
 		var err error
 
-		// Try to parse as JSON first
 		if strings.HasPrefix(paramsStr, "{") || strings.HasPrefix(paramsStr, "[") {
 			params, err = tools.ConvertParameters(paramsStr)
 		} else {
-			// Treat as a simple string parameter
-			params = map[string]interface{}{
-				"input": paramsStr,
-			}
+			params = map[string]interface{}{"input": paramsStr}
 		}
 
 		if err != nil {
-			return "", fmt.Errorf("failed to parse tool parameters: %w", err)
+			return "", fmt.Errorf("解析工具参数失败: %w", err)
 		}
 
-		// Execute tool
+		// 执行工具
 		result, err := a.toolRegistry.ExecuteTool(toolName, params)
 		if err != nil {
-			return "", fmt.Errorf("tool execution failed: %w", err)
+			return "", fmt.Errorf("工具执行失败: %w", err)
 		}
 
-		// Prepare messages for follow-up
+		// 构建后续消息
 		messages := []core.ChatMessage{
 			{Role: core.RoleSystem, Content: a.SystemPrompt},
 		}
-
-		// Add history
 		for _, msg := range a.GetHistory() {
 			messages = append(messages, msg.ToChatMessage())
 		}
-
-		// Add assistant's tool call
 		messages = append(messages, core.ChatMessage{Role: core.RoleAssistant, Content: response})
-
-		// Add tool result
 		messages = append(messages, core.ChatMessage{
 			Role:    core.RoleUser,
-			Content: fmt.Sprintf("Tool %s returned: %s\n\nPlease continue based on this result.", toolName, result),
+			Content: fmt.Sprintf("工具 %s 返回: %s\n\n请基于此结果继续。", toolName, result),
 		})
 
-		// Get follow-up response
+		// 获取后续响应
 		response, err = a.LLM.Invoke(context.Background(), messages, nil)
 		if err != nil {
-			return "", fmt.Errorf("follow-up LLM invocation failed: %w", err)
+			return "", fmt.Errorf("后续 LLM 调用失败: %w", err)
 		}
 	}
 
 	return response, nil
 }
 
-// AddTool registers a new tool with the agent.
-func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) error {
-	if a.toolRegistry == nil {
-		return fmt.Errorf("tool registry not initialized")
+// StreamRun 流式执行 Agent。
+func (a *SimpleAgent) StreamRun(ctx context.Context, inputText string) (<-chan string, <-chan error) {
+	// 构建消息列表
+	messages := []core.ChatMessage{
+		{Role: core.RoleSystem, Content: a.SystemPrompt},
+	}
+	for _, msg := range a.GetHistory() {
+		messages = append(messages, msg.ToChatMessage())
+	}
+	messages = append(messages, core.ChatMessage{Role: core.RoleUser, Content: inputText})
+
+	// 如果启用工具调用，添加工具描述
+	if a.enableToolCalling && a.toolRegistry.Count() > 0 {
+		toolDesc := a.toolRegistry.GetToolsDescription()
+		messages[0] = core.ChatMessage{
+			Role:    core.RoleSystem,
+			Content: a.SystemPrompt + "\n\n" + toolDesc + "\n\nWhen you need to use a tool, use the format: [TOOL_CALL:tool_name:parameters]",
+		}
 	}
 
+	// 流式调用 LLM
+	streamCh, errCh := a.LLM.Think(ctx, messages, nil)
+
+	// 创建输出通道
+	outCh := make(chan string, 32)
+	outErrCh := make(chan error, 1)
+
+	go func() {
+		defer close(outCh)
+		defer close(outErrCh)
+
+		var fullResponse strings.Builder
+		for {
+			select {
+			case <-ctx.Done():
+				outErrCh <- ctx.Err()
+				return
+			case chunk, ok := <-streamCh:
+				if !ok {
+					// 流结束，保存到历史
+					a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
+					a.AddMessage(core.NewMessage(fullResponse.String(), core.RoleAssistant, core.Time{}, nil))
+					return
+				}
+				fullResponse.WriteString(chunk)
+				outCh <- chunk
+			case err, ok := <-errCh:
+				if ok && err != nil {
+					outErrCh <- err
+					return
+				}
+			}
+		}
+	}()
+
+	return outCh, outErrCh
+}
+
+// AddTool 注册工具。
+func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) error {
+	if a.toolRegistry == nil {
+		return fmt.Errorf("工具注册表未初始化")
+	}
 	return a.toolRegistry.RegisterTool(tool, autoExpand)
 }
 
-// RemoveTool unregisters a tool from the agent.
+// RemoveTool 移除工具。
 func (a *SimpleAgent) RemoveTool(name string) error {
 	if a.toolRegistry == nil {
-		return fmt.Errorf("tool registry not initialized")
+		return fmt.Errorf("工具注册表未初始化")
 	}
-
 	return a.toolRegistry.UnregisterTool(name)
 }
 
-// ListTools returns a list of all registered tool names.
+// ListTools 列出所有工具。
 func (a *SimpleAgent) ListTools() []string {
 	if a.toolRegistry == nil {
 		return []string{}
 	}
-
 	return a.toolRegistry.ListTools()
 }
 
-// EnableToolCalling enables or disables tool calling.
+// HasTools 检查是否有可用工具。
+func (a *SimpleAgent) HasTools() bool {
+	return a.enableToolCalling && a.toolRegistry != nil
+}
+
+// EnableToolCalling 启用/禁用工具调用。
 func (a *SimpleAgent) EnableToolCalling(enabled bool) {
 	a.enableToolCalling = enabled
 }
 
-// IsToolCallingEnabled returns whether tool calling is enabled.
+// IsToolCallingEnabled 返回工具调用是否启用。
 func (a *SimpleAgent) IsToolCallingEnabled() bool {
 	return a.enableToolCalling
 }
 
-// ProcessStreamingResponse processes a streaming response and handles tool calls.
-// This is useful when using Think() instead of Invoke().
-func (a *SimpleAgent) ProcessStreamingResponse(ctx context.Context, inputText string, streamCh <-chan string, errCh <-chan error) (string, error) {
-	var response strings.Builder
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case chunk, ok := <-streamCh:
-			if !ok {
-				// Stream closed
-				break
-			}
-			response.WriteString(chunk)
-		case err, ok := <-errCh:
-			if !ok {
-				// Error channel closed without error
-				break
-			}
-			return "", err
-		}
-	}
-
-	fullResponse := response.String()
-
-	// Process tool calls if enabled
-	if a.enableToolCalling {
-		var err error
-		fullResponse, err = a.processToolCalls(fullResponse)
-		if err != nil {
-			return "", fmt.Errorf("tool call processing failed: %w", err)
-		}
-	}
-
-	// Add to history
-	a.AddMessage(core.NewMessage(inputText, core.RoleUser, time.Time{}, nil))
-	a.AddMessage(core.NewMessage(fullResponse, core.RoleAssistant, time.Time{}, nil))
-
-	return fullResponse, nil
-}
-
-// ExtractToolCalls extracts all tool calls from a response string.
-// Returns a list of (toolName, parameters) tuples.
+// ExtractToolCalls 从响应中提取所有工具调用。
 func (a *SimpleAgent) ExtractToolCalls(response string) []ToolCall {
 	re := regexp.MustCompile(`\[TOOL_CALL:([^:]+):([^\]]+)\]`)
 	matches := re.FindAllStringSubmatch(response, -1)
@@ -276,24 +247,23 @@ func (a *SimpleAgent) ExtractToolCalls(response string) []ToolCall {
 			})
 		}
 	}
-
 	return calls
 }
 
-// ToolCall represents a single tool call.
-type ToolCall struct {
-	Name       string
-	Parameters string
-}
-
-// HasToolCall checks if a response contains any tool calls.
+// HasToolCall 检查响应是否包含工具调用。
 func (a *SimpleAgent) HasToolCall(response string) bool {
 	_, _, found := tools.ParseToolCall(response)
 	return found
 }
 
-// StripToolCalls removes tool call markers from a response.
+// StripToolCalls 移除响应中的工具调用标记。
 func (a *SimpleAgent) StripToolCalls(response string) string {
 	re := regexp.MustCompile(`\[TOOL_CALL:[^\]]+\]`)
 	return re.ReplaceAllString(response, "")
+}
+
+// ToolCall 表示单个工具调用。
+type ToolCall struct {
+	Name       string
+	Parameters string
 }
