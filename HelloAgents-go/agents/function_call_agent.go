@@ -26,10 +26,11 @@ func NewFunctionCallAgent(
 	systemPrompt string,
 	toolRegistry *tools.ToolRegistry,
 ) *FunctionCallAgent {
+	enableToolCalling := toolRegistry != nil && len(toolRegistry.ListTools()) > 0
 	return &FunctionCallAgent{
 		BaseAgent:          core.NewBaseAgent(name, llm, systemPrompt, nil),
 		toolRegistry:       toolRegistry,
-		enableToolCalling:  toolRegistry != nil && toolRegistry.Count() > 0,
+		enableToolCalling:  enableToolCalling,
 		defaultToolChoice:  "auto",
 		maxToolIterations:  10,
 	}
@@ -52,7 +53,7 @@ func (a *FunctionCallAgent) Run(ctx context.Context, inputText string) (string, 
 
 	// Build tool schemas if tool calling is enabled
 	var toolSchemas []map[string]interface{}
-	if a.enableToolCalling && a.toolRegistry.Count() > 0 {
+	if a.enableToolCalling && len(a.toolRegistry.ListTools()) > 0 {
 		toolSchemas = a.buildToolSchemas()
 	}
 
@@ -155,6 +156,12 @@ func (a *FunctionCallAgent) executeToolCall(toolCall ToolCallData) (string, erro
 		return "", fmt.Errorf("tool registry not initialized")
 	}
 
+	// Get tool
+	tool := a.toolRegistry.GetTool(toolCall.Name)
+	if tool == nil {
+		return "", fmt.Errorf("tool '%s' not found", toolCall.Name)
+	}
+
 	// Parse parameters
 	var params map[string]interface{}
 	if err := json.Unmarshal([]byte(toolCall.Arguments), &params); err != nil {
@@ -162,7 +169,7 @@ func (a *FunctionCallAgent) executeToolCall(toolCall ToolCallData) (string, erro
 	}
 
 	// Execute tool
-	result, err := a.toolRegistry.ExecuteTool(toolCall.Name, params)
+	result, err := tool.Run(params)
 	if err != nil {
 		return "", err
 	}
@@ -176,41 +183,35 @@ func (a *FunctionCallAgent) buildToolSchemas() []map[string]interface{} {
 		return []map[string]interface{}{}
 	}
 
-	return a.toolRegistry.ToOpenAITools()
+	toolList := a.toolRegistry.GetAllTools()
+	schemas := make([]map[string]interface{}, 0, len(toolList))
+
+	for _, tool := range toolList {
+		schemas = append(schemas, tool.ToOpenAISchema())
+	}
+
+	return schemas
 }
 
 // AddTool registers a new tool with the agent.
-func (a *FunctionCallAgent) AddTool(tool tools.Tool, autoExpand bool) error {
+func (a *FunctionCallAgent) AddTool(tool tools.Tool, autoExpand bool) {
 	if a.toolRegistry == nil {
-		return fmt.Errorf("tool registry not initialized")
+		a.toolRegistry = tools.NewToolRegistry()
 	}
 
-	err := a.toolRegistry.RegisterTool(tool, autoExpand)
-	if err != nil {
-		return err
-	}
+	a.toolRegistry.RegisterTool(tool, autoExpand)
 
 	// Update tool calling enabled status
-	a.enableToolCalling = a.toolRegistry.Count() > 0
-
-	return nil
+	a.enableToolCalling = len(a.toolRegistry.ListTools()) > 0
 }
 
 // RemoveTool unregisters a tool from the agent.
-func (a *FunctionCallAgent) RemoveTool(name string) error {
-	if a.toolRegistry == nil {
-		return fmt.Errorf("tool registry not initialized")
+func (a *FunctionCallAgent) RemoveTool(name string) {
+	if a.toolRegistry != nil {
+		a.toolRegistry.Unregister(name)
+		// Update tool calling enabled status
+		a.enableToolCalling = len(a.toolRegistry.ListTools()) > 0
 	}
-
-	err := a.toolRegistry.UnregisterTool(name)
-	if err != nil {
-		return err
-	}
-
-	// Update tool calling enabled status
-	a.enableToolCalling = a.toolRegistry.Count() > 0
-
-	return nil
 }
 
 // ListTools returns a list of all registered tool names.
@@ -245,7 +246,7 @@ func (a *FunctionCallAgent) GetMaxToolIterations() int {
 
 // EnableToolCalling enables or disables tool calling.
 func (a *FunctionCallAgent) EnableToolCalling(enabled bool) {
-	a.enableToolCalling = enabled && a.toolRegistry != nil && a.toolRegistry.Count() > 0
+	a.enableToolCalling = enabled && a.toolRegistry != nil && len(a.toolRegistry.ListTools()) > 0
 }
 
 // IsToolCallingEnabled returns whether tool calling is enabled.

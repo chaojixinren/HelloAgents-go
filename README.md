@@ -14,10 +14,10 @@ HelloAgents-Go 是 [HelloAgents](https://github.com/jjyaoao/HelloAgents) Python 
 
 | 模块 | 状态 | 模块 | 状态 |
 |------|------|------|------|
-| Core (核心) | ✅ | Tools (工具系统) | 🔨 |
-| SimpleAgent | ✅ | Memory (记忆系统) | 🔨 |
-| ReActAgent | 🚧 | Context (上下文) | 🚧 |
-| ReflectionAgent | 🚧 | Evaluation (评估) | 📅 |
+| Core (核心) | ✅ | Tools (工具系统) | ✅ |
+| SimpleAgent | ✅ | Memory (记忆系统) | 🚧 |
+| ReActAgent | ✅ | Context (上下文) | 🚧 |
+| ReflectionAgent | ✅ | Evaluation (评估) | 📅 |
 | PlanAndSolveAgent | 🚧 | Protocols (协议) | 📅 |
 | FunctionCallAgent | 🚧 | RL (强化学习) | 📅 |
 

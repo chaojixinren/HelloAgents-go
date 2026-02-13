@@ -1,371 +1,215 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 )
 
-// ToolRegistry manages tool registration and execution.
-type ToolRegistry struct {
-	mu        sync.RWMutex
-	tools     map[string]Tool
-	functions map[string]*ToolFunction
+// functionInfo 函数工具信息
+type functionInfo struct {
+	description string
+	func_       func(string) string
 }
 
-// NewToolRegistry creates a new ToolRegistry.
+// ToolRegistry 工具注册表
+// 提供工具的注册、管理和执行功能。
+// 支持两种工具注册方式：
+// 1. Tool对象注册（推荐）
+// 2. 函数直接注册（简便）
+type ToolRegistry struct {
+	mu         sync.RWMutex // 互斥锁，用于保护工具注册表的并发访问 读多写少
+	_tools     map[string]Tool
+	_functions map[string]functionInfo
+}
+
+// NewToolRegistry 创建工具注册表
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
-		tools:     make(map[string]Tool),
-		functions: make(map[string]*ToolFunction),
+		_tools:     make(map[string]Tool),
+		_functions: make(map[string]functionInfo),
 	}
 }
 
-// RegisterTool registers a tool. If autoExpand is true and the tool implements
-// ExpandableTool, it will register all expanded sub-tools.
-func (r *ToolRegistry) RegisterTool(tool Tool, autoExpand bool) error {
+// RegisterTool 注册Tool对象
+// autoExpand: 是否自动展开可展开的工具（默认true）
+func (r *ToolRegistry) RegisterTool(tool Tool, autoExpand bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if tool == nil {
-		return fmt.Errorf("tool cannot be nil")
-	}
-
-	name := tool.Name()
-	if name == "" {
-		return fmt.Errorf("tool name cannot be empty")
-	}
-
-	// Check if tool is expandable
-	if expandable, ok := tool.(ExpandableTool); ok && autoExpand {
-		// Register all expanded tools
-		expandedTools := expandable.GetExpandedTools()
-		if len(expandedTools) == 0 {
-			return fmt.Errorf("expandable tool %s returned no sub-tools", name)
-		}
-
-		// Register the expandable tool itself
-		r.tools[name] = tool
-
-		// Register each sub-tool
-		for _, subTool := range expandedTools {
-			subName := subTool.Name()
-			if existingTool, exists := r.tools[subName]; exists {
-				return fmt.Errorf("tool %s already registered (from %s)", subName, existingTool.Name())
+	// 检查工具是否可展开
+	if autoExpand {
+		expandedTools := tool.GetExpandedTools()
+		if len(expandedTools) > 0 {
+			// 注册所有展开的子工具
+			for _, subTool := range expandedTools {
+				subName := subTool.Name()
+				if _, exists := r._tools[subName]; exists {
+					fmt.Printf("⚠️ 警告：工具 '%s' 已存在，将被覆盖。\n", subName)
+				}
+				r._tools[subName] = subTool
 			}
-			r.tools[subName] = subTool
+			fmt.Printf("✅ 工具 '%s' 已展开为 %d 个独立工具\n", tool.Name(), len(expandedTools))
+			return
 		}
-
-		return nil
 	}
 
-	// Register as a regular tool
-	if existingTool, exists := r.tools[name]; exists {
-		return fmt.Errorf("tool %s already registered (from %s)", name, existingTool.Name())
+	// 普通工具或不展开的工具
+	name := tool.Name()
+	if _, exists := r._tools[name]; exists {
+		fmt.Printf("⚠️ 警告：工具 '%s' 已存在，将被覆盖。\n", name)
 	}
 
-	r.tools[name] = tool
-	return nil
+	r._tools[name] = tool
+	fmt.Printf("✅ 工具 '%s' 已注册。\n", name)
 }
 
-// RegisterFunction registers a ToolFunction directly.
-func (r *ToolRegistry) RegisterFunction(fn *ToolFunction) error {
+// RegisterFunction 直接注册函数作为工具（简便方式）
+// name: 工具名称
+// description: 工具描述
+// func_: 工具函数，接受字符串参数，返回字符串结果
+func (r *ToolRegistry) RegisterFunction(name string, description string, func_ func(string) string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if fn == nil {
-		return fmt.Errorf("function cannot be nil")
+	if _, exists := r._functions[name]; exists {
+		fmt.Printf("⚠️ 警告：工具 '%s' 已存在，将被覆盖。\n", name)
 	}
 
-	name := fn.Name()
-	if name == "" {
-		return fmt.Errorf("function name cannot be empty")
+	r._functions[name] = functionInfo{
+		description: description,
+		func_:       func_,
 	}
-
-	if _, exists := r.functions[name]; exists {
-		return fmt.Errorf("function %s already registered", name)
-	}
-
-	r.functions[name] = fn
-	return nil
+	fmt.Printf("✅ 工具 '%s' 已注册。\n", name)
 }
 
-// UnregisterTool removes a tool from the registry.
-func (r *ToolRegistry) UnregisterTool(name string) error {
+// Unregister 注销工具
+func (r *ToolRegistry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.tools[name]; !exists {
-		return fmt.Errorf("tool %s not found", name)
+	if _, exists := r._tools[name]; exists {
+		delete(r._tools, name)
+		fmt.Printf("🗑️ 工具 '%s' 已注销。\n", name)
+	} else if _, exists := r._functions[name]; exists {
+		delete(r._functions, name)
+		fmt.Printf("🗑️ 工具 '%s' 已注销。\n", name)
+	} else {
+		fmt.Printf("⚠️ 工具 '%s' 不存在。\n", name)
 	}
+}
 
-	delete(r.tools, name)
+// GetTool 获取Tool对象
+func (r *ToolRegistry) GetTool(name string) Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r._tools[name]
+}
+
+// GetFunction 获取工具函数
+func (r *ToolRegistry) GetFunction(name string) func(string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if info, exists := r._functions[name]; exists {
+		return info.func_
+	}
 	return nil
 }
 
-// UnregisterFunction removes a function from the registry.
-func (r *ToolRegistry) UnregisterFunction(name string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.functions[name]; !exists {
-		return fmt.Errorf("function %s not found", name)
-	}
-
-	delete(r.functions, name)
-	return nil
-}
-
-// ExecuteTool executes a tool by name with the given input.
-// The input can be a JSON string or a map[string]interface{}.
-func (r *ToolRegistry) ExecuteTool(name string, input interface{}) (string, error) {
+// ExecuteTool 执行工具
+// name: 工具名称
+// inputText: 输入参数
+// 返回: 工具执行结果
+func (r *ToolRegistry) ExecuteTool(name string, inputText string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// First try tools
-	tool, exists := r.tools[name]
-	if !exists {
-		// Try functions
-		fn, exists := r.functions[name]
-		if !exists {
-			return "", fmt.Errorf("tool %s not found", name)
-		}
-		tool = fn
-	}
-
-	// Convert input to parameters
-	var parameters map[string]interface{}
-	var err error
-
-	switch v := input.(type) {
-	case map[string]interface{}:
-		parameters = v
-	case string:
-		parameters, err = ConvertParameters(v)
+	// 优先查找Tool对象
+	if tool, exists := r._tools[name]; exists {
+		// 简化参数传递，直接传入字符串
+		result, err := tool.Run(map[string]interface{}{"input": inputText})
 		if err != nil {
-			return "", fmt.Errorf("failed to parse parameters: %w", err)
+			return fmt.Sprintf("错误：执行工具 '%s' 时发生异常: %s", name, err.Error())
 		}
-	case nil:
-		parameters = make(map[string]interface{})
-	default:
-		return "", fmt.Errorf("unsupported input type: %T", input)
+		return result
 	}
 
-	// Validate parameters
-	if !tool.Validate(parameters) {
-		return "", fmt.Errorf("parameter validation failed for tool %s", name)
+	// 查找函数工具
+	if info, exists := r._functions[name]; exists {
+		result, err := info.func_(inputText), error(nil)
+		// Go 的函数签名是 func(string) string，不会返回 error
+		// 但为了与 Python 一致，这里保留结构
+		_ = err // 忽略
+		if result == "" {
+			// 如果函数返回空字符串，可能是错误
+		}
+		return result
 	}
 
-	// Execute the tool
-	result, err := tool.Run(parameters)
-	if err != nil {
-		return "", fmt.Errorf("tool execution failed: %w", err)
-	}
-
-	return result, nil
+	return fmt.Sprintf("错误：未找到名为 '%s' 的工具。", name)
 }
 
-// GetTool retrieves a tool by name.
-func (r *ToolRegistry) GetTool(name string) (Tool, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	tool, exists := r.tools[name]
-	return tool, exists
-}
-
-// GetFunction retrieves a function by name.
-func (r *ToolRegistry) GetFunction(name string) (*ToolFunction, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	fn, exists := r.functions[name]
-	return fn, exists
-}
-
-// ListTools returns a list of all registered tool names.
-func (r *ToolRegistry) ListTools() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	names := make([]string, 0, len(r.tools)+len(r.functions))
-	for name := range r.tools {
-		names = append(names, name)
-	}
-	for name := range r.functions {
-		names = append(names, name)
-	}
-
-	return names
-}
-
-// ListToolsWithDetails returns a list of all tools with their descriptions.
-func (r *ToolRegistry) ListToolsWithDetails() []map[string]interface{} {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	details := make([]map[string]interface{}, 0, len(r.tools)+len(r.functions))
-
-	for _, tool := range r.tools {
-		details = append(details, map[string]interface{}{
-			"name":        tool.Name(),
-			"description": tool.Description(),
-			"parameters":  tool.GetParameters(),
-		})
-	}
-
-	for _, fn := range r.functions {
-		details = append(details, map[string]interface{}{
-			"name":        fn.Name(),
-			"description": fn.Description(),
-			"parameters":  fn.GetParameters(),
-		})
-	}
-
-	return details
-}
-
-// GetToolsDescription returns a formatted string describing all available tools.
+// GetToolsDescription 获取所有可用工具的格式化描述字符串
+// 返回: 工具描述字符串，用于构建提示词
 func (r *ToolRegistry) GetToolsDescription() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if len(r.tools) == 0 && len(r.functions) == 0 {
-		return "No tools available."
+	descriptions := make([]string, 0)
+
+	// Tool对象描述
+	for _, tool := range r._tools {
+		descriptions = append(descriptions, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
 	}
 
-	var builder strings.Builder
-	builder.WriteString("Available tools:\n")
-
-	// List tools
-	for _, tool := range r.tools {
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", tool.Name(), tool.Description()))
-		params := tool.GetParameters()
-		if len(params) > 0 {
-			builder.WriteString("  Parameters:\n")
-			for _, p := range params {
-				required := ""
-				if p.Required {
-					required = " (required)"
-				}
-				builder.WriteString(fmt.Sprintf("    - %s (%s)%s: %s\n", p.Name, p.Type, required, p.Description))
-			}
-		}
+	// 函数工具描述
+	for name, info := range r._functions {
+		descriptions = append(descriptions, fmt.Sprintf("- %s: %s", name, info.description))
 	}
 
-	// List functions
-	for _, fn := range r.functions {
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", fn.Name(), fn.Description()))
-		params := fn.GetParameters()
-		if len(params) > 0 {
-			builder.WriteString("  Parameters:\n")
-			for _, p := range params {
-				required := ""
-				if p.Required {
-					required = " (required)"
-				}
-				builder.WriteString(fmt.Sprintf("    - %s (%s)%s: %s\n", p.Name, p.Type, required, p.Description))
-			}
-		}
+	if len(descriptions) == 0 {
+		return "暂无可用工具"
 	}
 
-	return builder.String()
+	return strings.Join(descriptions, "\n")
 }
 
-// ToOpenAITools returns all tools in OpenAI function calling format.
-func (r *ToolRegistry) ToOpenAITools() []map[string]interface{} {
+// ListTools 列出所有工具名称
+func (r *ToolRegistry) ListTools() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	tools := make([]map[string]interface{}, 0, len(r.tools)+len(r.functions))
-
-	for _, tool := range r.tools {
-		// Skip expandable tools - only include leaf tools
-		if _, isExpandable := tool.(ExpandableTool); !isExpandable {
-			tools = append(tools, tool.ToOpenAISchema())
-		}
+	names := make([]string, 0, len(r._tools)+len(r._functions))
+	for name := range r._tools {
+		names = append(names, name)
 	}
-
-	for _, fn := range r.functions {
-		tools = append(tools, fn.ToOpenAISchema())
+	for name := range r._functions {
+		names = append(names, name)
 	}
+	return names
+}
 
+// GetAllTools 获取所有Tool对象
+func (r *ToolRegistry) GetAllTools() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]Tool, 0, len(r._tools))
+	for _, tool := range r._tools {
+		tools = append(tools, tool)
+	}
 	return tools
 }
 
-// ToOpenAIToolsJSON returns all tools in OpenAI function calling format as JSON.
-func (r *ToolRegistry) ToOpenAIToolsJSON() (string, error) {
-	tools := r.ToOpenAITools()
-	data, err := json.MarshalIndent(tools, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal tools to JSON: %w", err)
-	}
-	return string(data), nil
-}
-
-// HasTool checks if a tool with the given name exists.
-func (r *ToolRegistry) HasTool(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	_, exists := r.tools[name]
-	if !exists {
-		_, exists = r.functions[name]
-	}
-	return exists
-}
-
-// Clear removes all tools and functions from the registry.
+// Clear 清空所有工具
 func (r *ToolRegistry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.tools = make(map[string]Tool)
-	r.functions = make(map[string]*ToolFunction)
+	r._tools = make(map[string]Tool)
+	r._functions = make(map[string]functionInfo)
+	fmt.Println("🧹 所有工具已清空。")
 }
 
-// Count returns the total number of registered tools and functions.
-func (r *ToolRegistry) Count() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return len(r.tools) + len(r.functions)
-}
-
-// Merge merges another registry into this one.
-// If there are conflicts, the tools from the other registry take precedence.
-func (r *ToolRegistry) Merge(other *ToolRegistry) {
-	r.mu.Lock()
-	other.mu.RLock()
-	defer r.mu.Unlock()
-	defer other.mu.RUnlock()
-
-	for name, tool := range other.tools {
-		r.tools[name] = tool
-	}
-
-	for name, fn := range other.functions {
-		r.functions[name] = fn
-	}
-}
-
-// Clone creates a deep copy of the registry.
-func (r *ToolRegistry) Clone() *ToolRegistry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	newRegistry := NewToolRegistry()
-
-	// Copy tools
-	for name, tool := range r.tools {
-		newRegistry.tools[name] = tool
-	}
-
-	// Copy functions
-	for name, fn := range r.functions {
-		newRegistry.functions[name] = fn
-	}
-
-	return newRegistry
-}
+// GlobalRegistry 全局工具注册表
+var GlobalRegistry = NewToolRegistry()

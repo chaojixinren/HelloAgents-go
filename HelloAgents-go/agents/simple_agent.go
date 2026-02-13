@@ -158,7 +158,7 @@ func (a *SimpleAgent) convertParameterTypes(toolName string, paramDict map[strin
 		return paramDict
 	}
 
-	toolParams := tool.Parameters()
+	toolParams := tool.GetParameters()
 	paramTypes := make(map[string]string)
 	for _, p := range toolParams {
 		paramTypes[p.Name] = p.Type
@@ -372,20 +372,19 @@ func (a *SimpleAgent) StreamRun(ctx context.Context, inputText string) (<-chan s
 }
 
 // AddTool 添加工具到 Agent。
-func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) error {
+func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) {
 	if a.toolRegistry == nil {
 		a.toolRegistry = tools.NewToolRegistry()
 		a.enableToolCalling = true
 	}
-	return a.toolRegistry.RegisterTool(tool, autoExpand)
+	a.toolRegistry.RegisterTool(tool, autoExpand)
 }
 
 // RemoveTool 移除工具。
-func (a *SimpleAgent) RemoveTool(toolName string) bool {
-	if a.toolRegistry == nil {
-		return false
+func (a *SimpleAgent) RemoveTool(toolName string) {
+	if a.toolRegistry != nil {
+		a.toolRegistry.Unregister(toolName)
 	}
-	return a.toolRegistry.UnregisterTool(toolName) == nil
 }
 
 // ListTools 列出所有可用工具。

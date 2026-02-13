@@ -10,299 +10,201 @@ import (
 	"helloagents-go/HelloAgents-go/tools"
 )
 
-// ReActAgent implements the ReAct (Reasoning + Acting) paradigm.
-// It follows a thought-action-observation loop for problem solving.
+// 默认 ReAct 提示词模板
+var defaultReActPrompt = `你是一个具备推理和行动能力的AI助手。你可以通过思考分析问题，然后调用合适的工具来获取信息，最终给出准确的答案。
+
+## 可用工具
+{tools}
+
+## 工作流程
+请严格按照以下格式进行回应，每次只能执行一个步骤：
+
+Thought: 分析问题，确定需要什么信息，制定研究策略。
+Action: 选择合适的工具获取信息，格式为：
+- ` + "`{tool_name}[{tool_input}]`" + `：调用工具获取信息。
+- ` + "`Finish[研究结论]`" + `：当你有足够信息得出结论时。
+
+## 重要提醒
+1. 每次回应必须包含Thought和Action两部分
+2. 工具调用的格式必须严格遵循：工具名[参数]
+3. 只有当你确信有足够信息回答问题时，才使用Finish
+4. 如果工具返回的信息不够，继续使用其他工具或相同工具的不同参数
+
+## 当前任务
+**Question:** {question}
+
+## 执行历史
+{history}
+
+现在开始你的推理和行动：`
+
+// ReActAgent ReAct (Reasoning and Acting) Agent。
+// 结合推理和行动的智能体，适合需要外部信息的任务。
 type ReActAgent struct {
 	*core.BaseAgent
-	toolRegistry *tools.ToolRegistry
-	maxSteps     int
-	customPrompt string
+	toolRegistry    *tools.ToolRegistry
+	maxSteps        int
+	currentHistory  []string
+	promptTemplate  string
 }
 
-// ReActStep represents a single step in the ReAct loop.
-type ReActStep struct {
-	Thought     string
-	Action      string
-	Observation string
-}
-
-// NewReActAgent creates a new ReActAgent.
+// NewReActAgent 创建 ReActAgent。
 func NewReActAgent(
 	name string,
 	llm *core.HelloAgentsLLM,
-	systemPrompt string,
 	toolRegistry *tools.ToolRegistry,
+	systemPrompt string,
+	config *core.Config,
+	maxSteps int,
+	customPrompt string,
 ) *ReActAgent {
+	// 如果没有提供 toolRegistry，创建一个空的
+	if toolRegistry == nil {
+		toolRegistry = tools.NewToolRegistry()
+	}
+
+	if maxSteps <= 0 {
+		maxSteps = 5
+	}
+
+	promptTemplate := customPrompt
+	if promptTemplate == "" {
+		promptTemplate = defaultReActPrompt
+	}
+
 	return &ReActAgent{
-		BaseAgent:    core.NewBaseAgent(name, llm, systemPrompt, nil),
-		toolRegistry: toolRegistry,
-		maxSteps:     10,
-		customPrompt: "",
+		BaseAgent:      core.NewBaseAgent(name, llm, systemPrompt, config),
+		toolRegistry:   toolRegistry,
+		maxSteps:       maxSteps,
+		currentHistory: make([]string, 0),
+		promptTemplate: promptTemplate,
 	}
 }
 
-// Run executes the ReAct agent with the given input.
+// Run 运行 ReAct Agent。
 func (a *ReActAgent) Run(ctx context.Context, inputText string) (string, error) {
-	// Build the initial prompt
-	history := make([]ReActStep, 0)
+	a.currentHistory = make([]string, 0)
 
-	// Iterate through the ReAct loop
-	for step := 0; step < a.maxSteps; step++ {
-		// Build prompt with history
-		prompt := a.buildPrompt(inputText, history)
+	fmt.Printf("\n🤖 %s 开始处理问题: %s\n", a.Name, inputText)
 
-		// Call LLM
+	for step := 1; step <= a.maxSteps; step++ {
+		fmt.Printf("\n--- 第 %d 步 ---\n", step)
+
+		// 构建提示词
+		toolsDesc := a.toolRegistry.GetToolsDescription()
+		historyStr := strings.Join(a.currentHistory, "\n")
+		prompt := strings.ReplaceAll(a.promptTemplate, "{tools}", toolsDesc)
+		prompt = strings.ReplaceAll(prompt, "{question}", inputText)
+		prompt = strings.ReplaceAll(prompt, "{history}", historyStr)
+
+		// 调用 LLM
 		messages := []core.ChatMessage{
-			{Role: core.RoleSystem, Content: a.SystemPrompt},
 			{Role: core.RoleUser, Content: prompt},
 		}
-
 		response, err := a.LLM.Invoke(ctx, messages, nil)
 		if err != nil {
-			return "", fmt.Errorf("LLM invocation failed at step %d: %w", step, err)
+			return "", fmt.Errorf("LLM 调用失败: %w", err)
 		}
 
-		// Parse response into thought and action
-		thought, action := a.parseResponse(response)
-
-		// Add to history
-		currentStep := ReActStep{Thought: thought, Action: action}
-		history = append(history, currentStep)
-
-		// If no action, we're done
-		if action == "" || strings.ToLower(action) == "finish" || strings.ToLower(action) == "done" {
-			// Extract final answer from thought
-			return a.extractFinalAnswer(thought), nil
+		if response == "" {
+			fmt.Println("❌ 错误：LLM未能返回有效响应。")
+			break
 		}
 
-		// Execute action
-		observation, err := a.executeAction(action)
-		if err != nil {
-			// Add error as observation
-			history[len(history)-1].Observation = fmt.Sprintf("Error: %v", err)
-		} else {
-			history[len(history)-1].Observation = observation
+		// 解析输出
+		thought, action := a.parseOutput(response)
+
+		if thought != "" {
+			fmt.Printf("🤔 思考: %s\n", thought)
 		}
+
+		if action == "" {
+			fmt.Println("⚠️ 警告：未能解析出有效的Action，流程终止。")
+			break
+		}
+
+		// 检查是否完成
+		if strings.HasPrefix(action, "Finish") {
+			finalAnswer := a.parseActionInput(action)
+			fmt.Printf("🎉 最终答案: %s\n", finalAnswer)
+
+			a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
+			a.AddMessage(core.NewMessage(finalAnswer, core.RoleAssistant, core.Time{}, nil))
+
+			return finalAnswer, nil
+		}
+
+		// 执行工具调用
+		toolName, toolInput := a.parseAction(action)
+		if toolName == "" || toolInput == "" {
+			a.currentHistory = append(a.currentHistory, "Observation: 无效的Action格式，请检查。")
+			continue
+		}
+
+		fmt.Printf("🎬 行动: %s[%s]\n", toolName, toolInput)
+
+		// 调用工具
+		observation := a.toolRegistry.ExecuteTool(toolName, toolInput)
+		fmt.Printf("👀 观察: %s\n", observation)
+
+		// 更新历史
+		a.currentHistory = append(a.currentHistory, fmt.Sprintf("Action: %s", action))
+		a.currentHistory = append(a.currentHistory, fmt.Sprintf("Observation: %s", observation))
 	}
 
-	// Max steps reached - return best answer from last thought
-	return a.extractFinalAnswer(history[len(history)-1].Thought), nil
+	fmt.Println("⏰ 已达到最大步数，流程终止。")
+	finalAnswer := "抱歉，我无法在限定步数内完成这个任务。"
+
+	a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
+	a.AddMessage(core.NewMessage(finalAnswer, core.RoleAssistant, core.Time{}, nil))
+
+	return finalAnswer, nil
 }
 
-// buildPrompt constructs the prompt with current history.
-func (a *ReActAgent) buildPrompt(inputText string, history []ReActStep) string {
-	var builder strings.Builder
+// parseOutput 解析 LLM 输出，提取思考和行动。
+func (a *ReActAgent) parseOutput(text string) (thought, action string) {
+	thoughtRe := regexp.MustCompile(`Thought: (.*)`)
+	actionRe := regexp.MustCompile(`Action: (.*)`)
 
-	// Add custom prompt if provided
-	if a.customPrompt != "" {
-		builder.WriteString(a.customPrompt)
-		builder.WriteString("\n\n")
+	thoughtMatch := thoughtRe.FindStringSubmatch(text)
+	actionMatch := actionRe.FindStringSubmatch(text)
+
+	if len(thoughtMatch) > 1 {
+		thought = strings.TrimSpace(thoughtMatch[1])
 	}
-
-	// Add available tools
-	if a.toolRegistry != nil && a.toolRegistry.Count() > 0 {
-		builder.WriteString("Available tools:\n")
-		for _, tool := range a.toolRegistry.ListTools() {
-			builder.WriteString(fmt.Sprintf("- %s\n", tool))
-		}
-		builder.WriteString("\n")
-	}
-
-	// Add input
-	builder.WriteString("Question: ")
-	builder.WriteString(inputText)
-	builder.WriteString("\n\n")
-
-	// Add history
-	for i, step := range history {
-		if step.Thought != "" {
-			builder.WriteString(fmt.Sprintf("Thought %d: %s\n", i+1, step.Thought))
-		}
-		if step.Action != "" {
-			builder.WriteString(fmt.Sprintf("Action %d: %s\n", i+1, step.Action))
-		}
-		if step.Observation != "" {
-			builder.WriteString(fmt.Sprintf("Observation %d: %s\n", i+1, step.Observation))
-		}
-		builder.WriteString("\n")
-	}
-
-	// Add next step prompt
-	builder.WriteString("Please provide your next thought and action in the format:")
-	builder.WriteString("\nThought: [your reasoning]")
-	builder.WriteString("\nAction: [action to take or 'finish' if done]")
-
-	return builder.String()
-}
-
-// parseResponse extracts thought and action from the LLM response.
-func (a *ReActAgent) parseResponse(response string) (thought, action string) {
-	// Try to parse structured format
-	thoughtRe := regexp.MustCompile(`(?i)thought\s*[:：]\s*(.+?)(?:\n|$)`)
-	actionRe := regexp.MustCompile(`(?i)action\s*[:：]\s*(.+?)(?:\n|$)`)
-
-	thoughtMatches := thoughtRe.FindStringSubmatch(response)
-	actionMatches := actionRe.FindStringSubmatch(response)
-
-	if len(thoughtMatches) > 1 {
-		thought = strings.TrimSpace(thoughtMatches[1])
-	} else {
-		// If no explicit thought marker, use the whole response as thought
-		thought = strings.TrimSpace(response)
-	}
-
-	if len(actionMatches) > 1 {
-		action = strings.TrimSpace(actionMatches[1])
-	} else {
-		// Try to extract action from common patterns
-		action = a.extractAction(response)
+	if len(actionMatch) > 1 {
+		action = strings.TrimSpace(actionMatch[1])
 	}
 
 	return thought, action
 }
 
-// extractAction attempts to extract an action from unstructured text.
-func (a *ReActAgent) extractAction(response string) string {
-	response = strings.ToLower(response)
-
-	// Check for finish/done keywords
-	if strings.Contains(response, "finish") || strings.Contains(response, "done") ||
-		strings.Contains(response, "complete") || strings.Contains(response, "answer:") {
-		return "finish"
+// parseAction 解析行动文本，提取工具名称和输入。
+func (a *ReActAgent) parseAction(actionText string) (toolName, toolInput string) {
+	re := regexp.MustCompile(`(\w+)\[(.*)\]`)
+	match := re.FindStringSubmatch(actionText)
+	if len(match) >= 3 {
+		return match[1], match[2]
 	}
+	return "", ""
+}
 
-	// Try to find tool call pattern
-	if strings.Contains(response, "[tool_call:") {
-		re := regexp.MustCompile(`\[tool_call:([^\]:]+):([^\]]+)\]`)
-		matches := re.FindStringSubmatch(response)
-		if len(matches) >= 3 {
-			return fmt.Sprintf("Use tool %s with parameters: %s", matches[1], matches[2])
-		}
+// parseActionInput 解析行动输入。
+func (a *ReActAgent) parseActionInput(actionText string) string {
+	re := regexp.MustCompile(`\w+\[(.*)\]`)
+	match := re.FindStringSubmatch(actionText)
+	if len(match) > 1 {
+		return match[1]
 	}
-
-	// Try to find calculator pattern
-	if strings.Contains(response, "calculate") || strings.Contains(response, "compute") {
-		re := regexp.MustCompile(`(?:calculate|compute)\s*:?\s*([0-9+\-*/^() .%a-zA-Z]+)`)
-		matches := re.FindStringSubmatch(response)
-		if len(matches) > 1 {
-			return fmt.Sprintf("calculator: %s", strings.TrimSpace(matches[1]))
-		}
-	}
-
-	// Try to find terminal command pattern
-	if strings.Contains(response, "terminal") || strings.Contains(response, "command") ||
-		strings.Contains(response, "run") || strings.Contains(response, "execute") {
-		re := regexp.MustCompile(`(?:terminal|command|run|execute)\s*:?\s*(.+)`)
-		matches := re.FindStringSubmatch(response)
-		if len(matches) > 1 {
-			return fmt.Sprintf("terminal: %s", strings.TrimSpace(matches[1]))
-		}
-	}
-
 	return ""
 }
 
-// executeAction executes an action and returns the observation.
-func (a *ReActAgent) executeAction(action string) (string, error) {
-	if a.toolRegistry == nil {
-		return "", fmt.Errorf("no tool registry available")
-	}
-
-	// Parse action
-	action = strings.TrimSpace(action)
-
-	// Check for finish action
-	if strings.ToLower(action) == "finish" || strings.ToLower(action) == "done" {
-		return "", nil
-	}
-
-	// Parse tool call format: "tool_name: parameters" or "Use tool tool_name with parameters: ..."
-	if strings.Contains(action, ":") {
-		parts := strings.SplitN(action, ":", 2)
-		if len(parts) == 2 {
-			toolName := strings.TrimSpace(parts[0])
-			paramsStr := strings.TrimSpace(parts[1])
-
-			// Remove common prefixes
-			toolName = strings.TrimPrefix(toolName, "Use tool ")
-			toolName = strings.TrimPrefix(toolName, "calculator ")
-			toolName = strings.TrimPrefix(toolName, "terminal ")
-
-			// Prepare parameters
-			var params map[string]interface{}
-			if toolName == "calculator" {
-				params = map[string]interface{}{"expression": paramsStr}
-			} else if toolName == "terminal" {
-				params = map[string]interface{}{"command": paramsStr}
-			} else {
-				// Try to parse as JSON
-				var err error
-				params, err = tools.ConvertParameters(paramsStr)
-				if err != nil {
-					params = map[string]interface{}{"input": paramsStr}
-				}
-			}
-
-			// Execute tool
-			result, err := a.toolRegistry.ExecuteTool(toolName, params)
-			if err != nil {
-				return "", fmt.Errorf("tool execution failed: %w", err)
-			}
-
-			return result, nil
-		}
-	}
-
-	return "", fmt.Errorf("unable to parse action: %s", action)
+// AddTool 添加工具到工具注册表。
+func (a *ReActAgent) AddTool(tool tools.Tool, autoExpand bool) {
+	a.toolRegistry.RegisterTool(tool, autoExpand)
 }
 
-// extractFinalAnswer extracts the final answer from a thought.
-func (a *ReActAgent) extractFinalAnswer(thought string) string {
-	// Look for answer patterns
-	re := regexp.MustCompile(`(?i)(?:answer|final|result|conclusion)\s*[:：]\s*(.+)`)
-	matches := re.FindStringSubmatch(thought)
-	if len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
-	}
-
-	// Return the thought as is
-	return strings.TrimSpace(thought)
-}
-
-// SetMaxSteps sets the maximum number of reasoning steps.
-func (a *ReActAgent) SetMaxSteps(maxSteps int) {
-	a.maxSteps = maxSteps
-}
-
-// GetMaxSteps returns the maximum number of reasoning steps.
-func (a *ReActAgent) GetMaxSteps() int {
-	return a.maxSteps
-}
-
-// SetCustomPrompt sets a custom prompt template.
-func (a *ReActAgent) SetCustomPrompt(prompt string) {
-	a.customPrompt = prompt
-}
-
-// GetCustomPrompt returns the custom prompt template.
-func (a *ReActAgent) GetCustomPrompt() string {
-	return a.customPrompt
-}
-
-// AddTool registers a new tool with the agent.
-func (a *ReActAgent) AddTool(tool tools.Tool, autoExpand bool) error {
-	if a.toolRegistry == nil {
-		return fmt.Errorf("tool registry not initialized")
-	}
-
-	return a.toolRegistry.RegisterTool(tool, autoExpand)
-}
-
-// ListTools returns a list of all registered tool names.
+// ListTools 列出所有可用工具。
 func (a *ReActAgent) ListTools() []string {
-	if a.toolRegistry == nil {
-		return []string{}
-	}
-
 	return a.toolRegistry.ListTools()
 }
