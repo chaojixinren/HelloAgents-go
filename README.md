@@ -18,7 +18,7 @@ HelloAgents-Go 是 [HelloAgents](https://github.com/jjyaoao/HelloAgents) Python 
 | SimpleAgent | ✅ | Memory (记忆系统) | 🚧 |
 | ReActAgent | ✅ | Context (上下文) | 🚧 |
 | ReflectionAgent | ✅ | Evaluation (评估) | 📅 |
-| PlanAndSolveAgent | 🚧 | Protocols (协议) | 📅 |
+| PlanAndSolveAgent | ✅ | Protocols (协议) | 📅 |
 | FunctionCallAgent | 🚧 | RL (强化学习) | 📅 |
 
 ✅ 已完成 | 🔨 部分完成 | 🚧 开发中 | 📅 计划中
