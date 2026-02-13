@@ -2,10 +2,11 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
-	"time"
 
 	"helloagents-go/HelloAgents-go/core"
 	"helloagents-go/HelloAgents-go/tools"
@@ -13,7 +14,6 @@ import (
 
 // SimpleAgent 是简单的对话 Agent，支持可选的工具调用。
 // 使用自定义工具调用格式: [TOOL_CALL:tool_name:parameters]
-// 嵌入 BaseAgent 以获得基础字段和方法，与 Python 继承 Agent 对应。
 type SimpleAgent struct {
 	*core.BaseAgent
 	toolRegistry      *tools.ToolRegistry
@@ -26,19 +26,238 @@ func NewSimpleAgent(
 	llm *core.HelloAgentsLLM,
 	systemPrompt string,
 	toolRegistry *tools.ToolRegistry,
+	enableToolCalling bool,
 ) *SimpleAgent {
 	return &SimpleAgent{
 		BaseAgent:         core.NewBaseAgent(name, llm, systemPrompt, nil),
 		toolRegistry:      toolRegistry,
-		enableToolCalling: toolRegistry != nil,
+		enableToolCalling: enableToolCalling && toolRegistry != nil,
 	}
 }
 
-// Run 执行 Agent。
-func (a *SimpleAgent) Run(ctx context.Context, inputText string) (string, error) {
+// getEnhancedSystemPrompt 构建增强的系统提示词，包含工具信息。
+func (a *SimpleAgent) getEnhancedSystemPrompt() string {
+	basePrompt := a.SystemPrompt
+	if basePrompt == "" {
+		basePrompt = "你是一个有用的AI助手。"
+	}
+
+	if !a.enableToolCalling || a.toolRegistry == nil {
+		return basePrompt
+	}
+
+	toolsDesc := a.toolRegistry.GetToolsDescription()
+	if toolsDesc == "" || toolsDesc == "暂无可用工具" {
+		return basePrompt
+	}
+
+	var sb strings.Builder
+	sb.WriteString(basePrompt)
+	sb.WriteString("\n\n## 可用工具\n")
+	sb.WriteString("你可以使用以下工具来帮助回答问题：\n")
+	sb.WriteString(toolsDesc)
+	sb.WriteString("\n\n## 工具调用格式\n")
+	sb.WriteString("当需要使用工具时，请使用以下格式：\n")
+	sb.WriteString("`[TOOL_CALL:{tool_name}:{parameters}]`\n\n")
+	sb.WriteString("### 参数格式说明\n")
+	sb.WriteString("1. **多个参数**：使用 `key=value` 格式，用逗号分隔\n")
+	sb.WriteString("   示例：`[TOOL_CALL:calculator_multiply:a=12,b=8]`\n\n")
+	sb.WriteString("2. **单个参数**：直接使用 `key=value`\n")
+	sb.WriteString("   示例：`[TOOL_CALL:search:query=Python编程]`\n\n")
+	sb.WriteString("3. **简单查询**：可以直接传入文本\n")
+	sb.WriteString("   示例：`[TOOL_CALL:search:Python编程]`\n")
+
+	return sb.String()
+}
+
+// parseToolCalls 解析文本中的工具调用。
+func (a *SimpleAgent) parseToolCalls(text string) []map[string]string {
+	pattern := regexp.MustCompile(`\[TOOL_CALL:([^:]+):([^\]]+)\]`)
+	matches := pattern.FindAllStringSubmatch(text, -1)
+
+	calls := make([]map[string]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 3 {
+			calls = append(calls, map[string]string{
+				"tool_name":  strings.TrimSpace(match[1]),
+				"parameters": strings.TrimSpace(match[2]),
+				"original":   match[0],
+			})
+		}
+	}
+	return calls
+}
+
+// executeToolCall 执行工具调用。
+func (a *SimpleAgent) executeToolCall(toolName, parameters string) string {
+	if a.toolRegistry == nil {
+		return "❌ 错误：未配置工具注册表"
+	}
+
+	tool := a.toolRegistry.GetTool(toolName)
+	if tool == nil {
+		return fmt.Sprintf("❌ 错误：未找到工具 '%s'", toolName)
+	}
+
+	paramDict := a.parseToolParameters(toolName, parameters)
+
+	result, err := tool.Run(paramDict)
+	if err != nil {
+		return fmt.Sprintf("❌ 工具调用失败：%s", err)
+	}
+	return fmt.Sprintf("🔧 工具 %s 执行结果：\n%s", toolName, result)
+}
+
+// parseToolParameters 智能解析工具参数。
+func (a *SimpleAgent) parseToolParameters(toolName, parameters string) map[string]interface{} {
+	paramDict := make(map[string]interface{})
+	parameters = strings.TrimSpace(parameters)
+
+	// 尝试解析 JSON 格式
+	if strings.HasPrefix(parameters, "{") {
+		if err := json.Unmarshal([]byte(parameters), &paramDict); err == nil {
+			return a.convertParameterTypes(toolName, paramDict)
+		}
+	}
+
+	// key=value 格式
+	if strings.Contains(parameters, "=") {
+		if strings.Contains(parameters, ",") {
+			pairs := strings.Split(parameters, ",")
+			for _, pair := range pairs {
+				if kv := strings.SplitN(pair, "=", 2); len(kv) == 2 {
+					paramDict[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+				}
+			}
+		} else {
+			if kv := strings.SplitN(parameters, "=", 2); len(kv) == 2 {
+				paramDict[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+			}
+		}
+
+		paramDict = a.convertParameterTypes(toolName, paramDict)
+
+		if _, ok := paramDict["action"]; !ok {
+			paramDict = a.inferAction(toolName, paramDict)
+		}
+	} else {
+		paramDict = a.inferSimpleParameters(toolName, parameters)
+	}
+
+	return paramDict
+}
+
+// convertParameterTypes 根据工具的参数定义转换参数类型。
+func (a *SimpleAgent) convertParameterTypes(toolName string, paramDict map[string]interface{}) map[string]interface{} {
+	if a.toolRegistry == nil {
+		return paramDict
+	}
+
+	tool := a.toolRegistry.GetTool(toolName)
+	if tool == nil {
+		return paramDict
+	}
+
+	toolParams := tool.Parameters()
+	paramTypes := make(map[string]string)
+	for _, p := range toolParams {
+		paramTypes[p.Name] = p.Type
+	}
+
+	converted := make(map[string]interface{})
+	for key, value := range paramDict {
+		if paramType, ok := paramTypes[key]; ok {
+			converted[key] = convertValue(value, paramType)
+		} else {
+			converted[key] = value
+		}
+	}
+
+	return converted
+}
+
+// convertValue 转换单个值的类型。
+func convertValue(value interface{}, paramType string) interface{} {
+	strVal, ok := value.(string)
+	if !ok {
+		return value
+	}
+
+	switch paramType {
+	case "number":
+		if f, err := strconv.ParseFloat(strVal, 64); err == nil {
+			return f
+		}
+	case "integer":
+		if i, err := strconv.Atoi(strVal); err == nil {
+			return i
+		}
+	case "boolean":
+		lower := strings.ToLower(strVal)
+		return lower == "true" || lower == "1" || lower == "yes"
+	}
+
+	return value
+}
+
+// inferAction 根据工具类型和参数推断 action。
+func (a *SimpleAgent) inferAction(toolName string, paramDict map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range paramDict {
+		result[k] = v
+	}
+
+	switch toolName {
+	case "memory":
+		if _, ok := result["recall"]; ok {
+			result["action"] = "search"
+			result["query"] = result["recall"]
+			delete(result, "recall")
+		} else if _, ok := result["store"]; ok {
+			result["action"] = "add"
+			result["content"] = result["store"]
+			delete(result, "store")
+		} else if _, ok := result["query"]; ok {
+			result["action"] = "search"
+		} else if _, ok := result["content"]; ok {
+			result["action"] = "add"
+		}
+	case "rag":
+		if _, ok := result["search"]; ok {
+			result["action"] = "search"
+			result["query"] = result["search"]
+			delete(result, "search")
+		} else if _, ok := result["query"]; ok {
+			result["action"] = "search"
+		} else if _, ok := result["text"]; ok {
+			result["action"] = "add_text"
+		}
+	}
+
+	return result
+}
+
+// inferSimpleParameters 为简单参数推断完整的参数字典。
+func (a *SimpleAgent) inferSimpleParameters(toolName, parameters string) map[string]interface{} {
+	switch toolName {
+	case "rag":
+		return map[string]interface{}{"action": "search", "query": parameters}
+	case "memory":
+		return map[string]interface{}{"action": "search", "query": parameters}
+	default:
+		return map[string]interface{}{"input": parameters}
+	}
+}
+
+// Run 运行 Agent，支持多轮工具调用。
+func (a *SimpleAgent) Run(ctx context.Context, inputText string, maxToolIterations int) (string, error) {
+	if maxToolIterations <= 0 {
+		maxToolIterations = 3
+	}
+
 	// 构建消息列表
 	messages := []core.ChatMessage{
-		{Role: core.RoleSystem, Content: a.SystemPrompt},
+		{Role: core.RoleSystem, Content: a.getEnhancedSystemPrompt()},
 	}
 
 	// 添加历史消息
@@ -46,120 +265,79 @@ func (a *SimpleAgent) Run(ctx context.Context, inputText string) (string, error)
 		messages = append(messages, msg.ToChatMessage())
 	}
 
-	// 添加当前输入
+	// 添加当前用户消息
 	messages = append(messages, core.ChatMessage{Role: core.RoleUser, Content: inputText})
 
-	// 如果启用工具调用，添加工具描述到系统提示
-	if a.enableToolCalling && a.toolRegistry.Count() > 0 {
-		toolDesc := a.toolRegistry.GetToolsDescription()
-		messages[0] = core.ChatMessage{
-			Role:    core.RoleSystem,
-			Content: a.SystemPrompt + "\n\n" + toolDesc + "\n\nWhen you need to use a tool, use the format: [TOOL_CALL:tool_name:parameters]",
-		}
-	}
-
-	// 调用 LLM
-	response, err := a.LLM.Invoke(ctx, messages, nil)
-	if err != nil {
-		return "", fmt.Errorf("LLM 调用失败: %w", err)
-	}
-
-	// 处理工具调用
-	if a.enableToolCalling {
-		response, err = a.processToolCalls(response)
+	// 如果没有启用工具调用，直接调用 LLM
+	if !a.enableToolCalling {
+		response, err := a.LLM.Invoke(ctx, messages, nil)
 		if err != nil {
-			return "", fmt.Errorf("工具调用处理失败: %w", err)
+			return "", fmt.Errorf("LLM 调用失败: %w", err)
 		}
+		a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
+		a.AddMessage(core.NewMessage(response, core.RoleAssistant, core.Time{}, nil))
+		return response, nil
 	}
 
-	// 添加消息到历史记录
-	a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
-	a.AddMessage(core.NewMessage(response, core.RoleAssistant, core.Time{}, nil))
+	// 迭代处理，支持多轮工具调用
+	var finalResponse string
+	for i := 0; i < maxToolIterations; i++ {
+		response, err := a.LLM.Invoke(ctx, messages, nil)
+		if err != nil {
+			return "", fmt.Errorf("LLM 调用失败: %w", err)
+		}
 
-	return response, nil
-}
-
-// processToolCalls 处理响应中的工具调用。
-func (a *SimpleAgent) processToolCalls(response string) (string, error) {
-	maxIterations := 10
-	iterations := 0
-
-	for iterations < maxIterations {
-		iterations++
-
-		// 检查是否有工具调用
-		toolName, paramsStr, found := tools.ParseToolCall(response)
-		if !found {
+		toolCalls := a.parseToolCalls(response)
+		if len(toolCalls) == 0 {
+			finalResponse = response
 			break
 		}
 
-		// 解析参数
-		var params map[string]interface{}
-		var err error
-
-		if strings.HasPrefix(paramsStr, "{") || strings.HasPrefix(paramsStr, "[") {
-			params, err = tools.ConvertParameters(paramsStr)
-		} else {
-			params = map[string]interface{}{"input": paramsStr}
+		// 执行所有工具调用
+		var toolResults []string
+		cleanResponse := response
+		for _, call := range toolCalls {
+			result := a.executeToolCall(call["tool_name"], call["parameters"])
+			toolResults = append(toolResults, result)
+			cleanResponse = strings.ReplaceAll(cleanResponse, call["original"], "")
 		}
 
-		if err != nil {
-			return "", fmt.Errorf("解析工具参数失败: %w", err)
-		}
-
-		// 执行工具
-		result, err := a.toolRegistry.ExecuteTool(toolName, params)
-		if err != nil {
-			return "", fmt.Errorf("工具执行失败: %w", err)
-		}
-
-		// 构建后续消息
-		messages := []core.ChatMessage{
-			{Role: core.RoleSystem, Content: a.SystemPrompt},
-		}
-		for _, msg := range a.GetHistory() {
-			messages = append(messages, msg.ToChatMessage())
-		}
-		messages = append(messages, core.ChatMessage{Role: core.RoleAssistant, Content: response})
+		// 构建包含工具结果的消息
+		messages = append(messages, core.ChatMessage{Role: core.RoleAssistant, Content: cleanResponse})
 		messages = append(messages, core.ChatMessage{
 			Role:    core.RoleUser,
-			Content: fmt.Sprintf("工具 %s 返回: %s\n\n请基于此结果继续。", toolName, result),
+			Content: fmt.Sprintf("工具执行结果：\n%s\n\n请基于这些结果给出完整的回答。", strings.Join(toolResults, "\n\n")),
 		})
-
-		// 获取后续响应
-		response, err = a.LLM.Invoke(context.Background(), messages, nil)
-		if err != nil {
-			return "", fmt.Errorf("后续 LLM 调用失败: %w", err)
-		}
 	}
 
-	return response, nil
+	// 如果超过最大迭代次数，获取最后一次回答
+	if finalResponse == "" {
+		response, err := a.LLM.Invoke(ctx, messages, nil)
+		if err != nil {
+			return "", fmt.Errorf("LLM 调用失败: %w", err)
+		}
+		finalResponse = response
+	}
+
+	// 保存到历史记录
+	a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
+	a.AddMessage(core.NewMessage(finalResponse, core.RoleAssistant, core.Time{}, nil))
+
+	return finalResponse, nil
 }
 
-// StreamRun 流式执行 Agent。
+// StreamRun 流式运行 Agent。
 func (a *SimpleAgent) StreamRun(ctx context.Context, inputText string) (<-chan string, <-chan error) {
-	// 构建消息列表
 	messages := []core.ChatMessage{
-		{Role: core.RoleSystem, Content: a.SystemPrompt},
+		{Role: core.RoleSystem, Content: a.getEnhancedSystemPrompt()},
 	}
 	for _, msg := range a.GetHistory() {
 		messages = append(messages, msg.ToChatMessage())
 	}
 	messages = append(messages, core.ChatMessage{Role: core.RoleUser, Content: inputText})
 
-	// 如果启用工具调用，添加工具描述
-	if a.enableToolCalling && a.toolRegistry.Count() > 0 {
-		toolDesc := a.toolRegistry.GetToolsDescription()
-		messages[0] = core.ChatMessage{
-			Role:    core.RoleSystem,
-			Content: a.SystemPrompt + "\n\n" + toolDesc + "\n\nWhen you need to use a tool, use the format: [TOOL_CALL:tool_name:parameters]",
-		}
-	}
-
-	// 流式调用 LLM
 	streamCh, errCh := a.LLM.Think(ctx, messages, nil)
 
-	// 创建输出通道
 	outCh := make(chan string, 32)
 	outErrCh := make(chan error, 1)
 
@@ -175,7 +353,6 @@ func (a *SimpleAgent) StreamRun(ctx context.Context, inputText string) (<-chan s
 				return
 			case chunk, ok := <-streamCh:
 				if !ok {
-					// 流结束，保存到历史
 					a.AddMessage(core.NewMessage(inputText, core.RoleUser, core.Time{}, nil))
 					a.AddMessage(core.NewMessage(fullResponse.String(), core.RoleAssistant, core.Time{}, nil))
 					return
@@ -194,23 +371,24 @@ func (a *SimpleAgent) StreamRun(ctx context.Context, inputText string) (<-chan s
 	return outCh, outErrCh
 }
 
-// AddTool 注册工具。
+// AddTool 添加工具到 Agent。
 func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) error {
 	if a.toolRegistry == nil {
-		return fmt.Errorf("工具注册表未初始化")
+		a.toolRegistry = tools.NewToolRegistry()
+		a.enableToolCalling = true
 	}
 	return a.toolRegistry.RegisterTool(tool, autoExpand)
 }
 
 // RemoveTool 移除工具。
-func (a *SimpleAgent) RemoveTool(name string) error {
+func (a *SimpleAgent) RemoveTool(toolName string) bool {
 	if a.toolRegistry == nil {
-		return fmt.Errorf("工具注册表未初始化")
+		return false
 	}
-	return a.toolRegistry.UnregisterTool(name)
+	return a.toolRegistry.UnregisterTool(toolName) == nil
 }
 
-// ListTools 列出所有工具。
+// ListTools 列出所有可用工具。
 func (a *SimpleAgent) ListTools() []string {
 	if a.toolRegistry == nil {
 		return []string{}
@@ -221,49 +399,4 @@ func (a *SimpleAgent) ListTools() []string {
 // HasTools 检查是否有可用工具。
 func (a *SimpleAgent) HasTools() bool {
 	return a.enableToolCalling && a.toolRegistry != nil
-}
-
-// EnableToolCalling 启用/禁用工具调用。
-func (a *SimpleAgent) EnableToolCalling(enabled bool) {
-	a.enableToolCalling = enabled
-}
-
-// IsToolCallingEnabled 返回工具调用是否启用。
-func (a *SimpleAgent) IsToolCallingEnabled() bool {
-	return a.enableToolCalling
-}
-
-// ExtractToolCalls 从响应中提取所有工具调用。
-func (a *SimpleAgent) ExtractToolCalls(response string) []ToolCall {
-	re := regexp.MustCompile(`\[TOOL_CALL:([^:]+):([^\]]+)\]`)
-	matches := re.FindAllStringSubmatch(response, -1)
-
-	calls := make([]ToolCall, 0, len(matches))
-	for _, match := range matches {
-		if len(match) == 3 {
-			calls = append(calls, ToolCall{
-				Name:       match[1],
-				Parameters: match[2],
-			})
-		}
-	}
-	return calls
-}
-
-// HasToolCall 检查响应是否包含工具调用。
-func (a *SimpleAgent) HasToolCall(response string) bool {
-	_, _, found := tools.ParseToolCall(response)
-	return found
-}
-
-// StripToolCalls 移除响应中的工具调用标记。
-func (a *SimpleAgent) StripToolCalls(response string) string {
-	re := regexp.MustCompile(`\[TOOL_CALL:[^\]]+\]`)
-	return re.ReplaceAllString(response, "")
-}
-
-// ToolCall 表示单个工具调用。
-type ToolCall struct {
-	Name       string
-	Parameters string
 }
