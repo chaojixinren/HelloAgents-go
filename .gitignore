@@ -1,0 +1,22 @@
+# 不纳入本仓库的 Python 项目
+HelloAgents-py/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+.env
+.env.local
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
