@@ -235,9 +235,12 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 }
 
 func (a *ReActAgent) buildMessages(inputText string) []map[string]any {
-	messages := make([]map[string]any, 0, 2)
+	messages := make([]map[string]any, 0, len(a.GetHistory())+2)
 	if a.SystemPrompt != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": a.SystemPrompt})
+	}
+	for _, msg := range a.GetHistory() {
+		messages = append(messages, map[string]any{"role": msg.Role, "content": msg.Content})
 	}
 	messages = append(messages, map[string]any{"role": "user", "content": inputText})
 	return messages

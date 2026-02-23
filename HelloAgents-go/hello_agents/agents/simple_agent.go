@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"helloagents-go/hello_agents/core"
+	"helloagents-go/hello_agents/observability"
 	"helloagents-go/hello_agents/tools"
 )
 
@@ -47,8 +48,25 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 
 	llmKwargs := cloneMapWithoutKeys(kwargs, "max_tool_iterations")
 	messages := a.buildMessages(inputText)
-	if a.TraceLogger != nil {
-		a.TraceLogger.LogEvent("message_written", map[string]any{
+
+	var traceLogger *observability.TraceLogger
+	if a.Config.TraceEnabled {
+		logger, err := observability.NewTraceLogger(
+			a.Config.TraceDir,
+			a.Config.TraceSanitize,
+			a.Config.TraceHTMLIncludeRawResponse,
+		)
+		if err == nil {
+			traceLogger = logger
+			traceLogger.LogEvent("session_start", map[string]any{
+				"agent_name": a.Name,
+				"agent_type": "SimpleAgent",
+			}, nil)
+		}
+	}
+
+	if traceLogger != nil {
+		traceLogger.LogEvent("message_written", map[string]any{
 			"role":    "user",
 			"content": inputText,
 		}, nil)
@@ -62,8 +80,8 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 		responseText := llmResponse.Content
 		a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 		a.AddMessage(core.NewMessage(responseText, core.MessageRoleAssistant, nil))
-		if a.TraceLogger != nil {
-			a.TraceLogger.LogEvent("session_end", map[string]any{
+		if traceLogger != nil {
+			traceLogger.LogEvent("session_end", map[string]any{
 				"duration":     time.Since(startTime).Seconds(),
 				"final_answer": responseText,
 				"status":       "success",
@@ -74,7 +92,7 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 				},
 				"latency_ms": llmResponse.LatencyMS,
 			}, nil)
-			_ = a.TraceLogger.Finalize()
+			_ = traceLogger.Finalize()
 		}
 		return responseText, nil
 	}
@@ -87,9 +105,9 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 		currentIteration++
 		response, err := a.LLM.InvokeWithTools(messages, toolSchemas, "auto", llmKwargs)
 		if err != nil {
-			if a.TraceLogger != nil {
+			if traceLogger != nil {
 				step := currentIteration
-				a.TraceLogger.LogEvent("error", map[string]any{
+				traceLogger.LogEvent("error", map[string]any{
 					"error_type": "LLM_ERROR",
 					"message":    err.Error(),
 				}, &step)
@@ -98,9 +116,9 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 		}
 
 		content, toolCalls := extractToolCallsAndContent(response)
-		if a.TraceLogger != nil {
+		if traceLogger != nil {
 			step := currentIteration
-			a.TraceLogger.LogEvent("model_output", map[string]any{
+			traceLogger.LogEvent("model_output", map[string]any{
 				"content":    content,
 				"tool_calls": len(toolCalls),
 				"usage":      usageFromLLMRawResponse(response),
@@ -135,18 +153,18 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 			if arguments == nil {
 				arguments = map[string]any{}
 			}
-			if a.TraceLogger != nil {
+			if traceLogger != nil {
 				step := currentIteration
-				a.TraceLogger.LogEvent("tool_call", map[string]any{
+				traceLogger.LogEvent("tool_call", map[string]any{
 					"tool_name":    toolCall.Name,
 					"tool_call_id": toolCall.ID,
 					"args":         arguments,
 				}, &step)
 			}
 			result := a.ExecuteToolCall(toolCall.Name, arguments)
-			if a.TraceLogger != nil {
+			if traceLogger != nil {
 				step := currentIteration
-				a.TraceLogger.LogEvent("tool_result", map[string]any{
+				traceLogger.LogEvent("tool_result", map[string]any{
 					"tool_name":    toolCall.Name,
 					"tool_call_id": toolCall.ID,
 					"result":       result,
@@ -171,14 +189,14 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 
 	a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 	a.AddMessage(core.NewMessage(finalResponse, core.MessageRoleAssistant, nil))
-	if a.TraceLogger != nil {
-		a.TraceLogger.LogEvent("session_end", map[string]any{
+	if traceLogger != nil {
+		traceLogger.LogEvent("session_end", map[string]any{
 			"duration":     time.Since(startTime).Seconds(),
 			"total_steps":  currentIteration,
 			"final_answer": finalResponse,
 			"status":       "success",
 		}, nil)
-		_ = a.TraceLogger.Finalize()
+		_ = traceLogger.Finalize()
 	}
 	return finalResponse, nil
 }
