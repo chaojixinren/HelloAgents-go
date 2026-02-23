@@ -3,6 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -10,7 +12,7 @@ import (
 
 type FunctionTool struct {
 	Description string
-	Handler     func(input string) ToolResponse
+	Handler     func(input string) any
 }
 
 type expandableTool interface {
@@ -81,12 +83,18 @@ func (r *ToolRegistry) RegisterTool(tool Tool, autoExpandArgs ...bool) {
 	r.tools[name] = tool
 }
 
-func (r *ToolRegistry) RegisterFunction(name string, handler func(input string) ToolResponse, description string) {
+// RegisterFunction mirrors Python register_function with both call styles:
+// 1) RegisterFunction(handler, name?, description?)
+// 2) RegisterFunction(name, description, handler)
+func (r *ToolRegistry) RegisterFunction(funcOrName any, args ...any) {
+	name, description, handler := parseFunctionRegistration(funcOrName, args...)
 	if name == "" || handler == nil {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if description == "" {
 		description = "执行 " + name
 	}
@@ -105,16 +113,17 @@ func (r *ToolRegistry) Unregister(name string) {
 	r.funcOrder = removeName(r.funcOrder, name)
 }
 
-func (r *ToolRegistry) UnregisterTool(name string) bool {
+// DisableTool mirrors Python subagent filtering behavior:
+// only remove Tool objects while keeping function-tools untouched.
+func (r *ToolRegistry) DisableTool(name string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, toolExists := r.tools[name]
-	_, fnExists := r.functions[name]
+	if _, exists := r.tools[name]; !exists {
+		return false
+	}
 	delete(r.tools, name)
-	delete(r.functions, name)
 	r.toolOrder = removeName(r.toolOrder, name)
-	r.funcOrder = removeName(r.funcOrder, name)
-	return toolExists || fnExists
+	return true
 }
 
 func (r *ToolRegistry) GetTool(name string) Tool {
@@ -123,7 +132,7 @@ func (r *ToolRegistry) GetTool(name string) Tool {
 	return r.tools[name]
 }
 
-func (r *ToolRegistry) GetFunction(name string) func(input string) ToolResponse {
+func (r *ToolRegistry) GetFunction(name string) func(input string) any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if fn, ok := r.functions[name]; ok {
@@ -175,6 +184,7 @@ func (r *ToolRegistry) ExecuteTool(name string, inputText string) ToolResponse {
 		response = tool.RunWithTiming(parameters)
 	} else if hasFn {
 		start := time.Now()
+		result := any(nil)
 		func() {
 			defer func() {
 				if p := recover(); p != nil {
@@ -185,9 +195,17 @@ func (r *ToolRegistry) ExecuteTool(name string, inputText string) ToolResponse {
 					)
 				}
 			}()
-			resp := fnInfo.Handler(inputText)
-			response = resp
+			result = fnInfo.Handler(inputText)
 		}()
+
+		if response.Status == "" {
+			response = Success(
+				fmt.Sprintf("%v", result),
+				map[string]any{"output": result},
+				nil,
+				nil,
+			)
+		}
 		if response.Stats == nil {
 			response.Stats = map[string]any{}
 		}
@@ -307,6 +325,85 @@ func (r *ToolRegistry) ReadMetadataCache() map[string]map[string]any {
 }
 
 var GlobalRegistry = NewToolRegistry(nil)
+
+func parseFunctionRegistration(funcOrName any, args ...any) (string, string, func(input string) any) {
+	// Legacy style: register_function(name, description, func)
+	if name, ok := funcOrName.(string); ok {
+		if strings.TrimSpace(name) == "" || len(args) < 2 {
+			return "", "", nil
+		}
+		// Backward compatibility for previous Go scaffold:
+		// register_function(name, handler, description)
+		if handler := coerceFunctionHandler(args[0]); handler != nil {
+			description, _ := args[1].(string)
+			return name, description, handler
+		}
+
+		description, _ := args[0].(string)
+		handler := coerceFunctionHandler(args[1])
+		return name, description, handler
+	}
+
+	// Modern style: register_function(func, name=None, description=None)
+	handler := coerceFunctionHandler(funcOrName)
+	if handler == nil {
+		return "", "", nil
+	}
+
+	name := ""
+	if len(args) > 0 {
+		name, _ = args[0].(string)
+	}
+	if strings.TrimSpace(name) == "" {
+		name = inferFunctionName(funcOrName)
+	}
+
+	description := ""
+	if len(args) > 1 {
+		description, _ = args[1].(string)
+	}
+
+	return name, description, handler
+}
+
+func inferFunctionName(handler any) string {
+	if handler == nil {
+		return ""
+	}
+
+	value := reflect.ValueOf(handler)
+	if value.Kind() != reflect.Func {
+		return ""
+	}
+
+	fn := runtime.FuncForPC(value.Pointer())
+	if fn == nil {
+		return ""
+	}
+
+	name := fn.Name()
+	if idx := strings.LastIndex(name, "."); idx >= 0 {
+		name = name[idx+1:]
+	}
+	return strings.TrimSuffix(name, "-fm")
+}
+
+func coerceFunctionHandler(handler any) func(input string) any {
+	switch fn := handler.(type) {
+	case func(string) any:
+		return fn
+	case func(string) ToolResponse:
+		return func(input string) any {
+			return fn(input)
+		}
+	case func(string) string:
+		return func(input string) any {
+			return fn(input)
+		}
+	default:
+		return nil
+	}
+}
 
 func removeName(names []string, target string) []string {
 	if len(names) == 0 {

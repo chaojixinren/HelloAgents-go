@@ -74,6 +74,19 @@ func NewReActAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, c
 			"Finish":  {},
 		},
 	}
+	base.SetRunDelegate(agent.Run)
+	base.SetMaxStepAccessors(
+		func() int {
+			return agent.MaxSteps
+		},
+		func(v int) {
+			if v <= 0 {
+				return
+			}
+			agent.MaxSteps = v
+			base.MaxSteps = v
+		},
+	)
 	base.AgentType = "ReActAgent"
 	base.MaxSteps = maxSteps
 	autoRegisterBuiltinTools(base)
@@ -400,16 +413,17 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 	return finalAnswer, nil
 }
 
-func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
-	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
-}
+func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any, hooks ...core.Hooks) <-chan core.AgentEvent {
+	activeHooks := core.Hooks{}
+	if len(hooks) > 0 {
+		activeHooks = hooks[0]
+	}
 
-func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 64)
 	go func() {
 		defer close(out)
 
-		a.emitHook(core.AgentStart, hooks.OnStart, map[string]any{
+		a.emitHook(core.AgentStart, activeHooks.OnStart, map[string]any{
 			"input_text": inputText,
 		})
 		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
@@ -423,7 +437,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 
 		for currentStep < a.MaxSteps {
 			currentStep++
-			a.emitHook(core.StepStart, hooks.OnStep, map[string]any{
+			a.emitHook(core.StepStart, activeHooks.OnStep, map[string]any{
 				"step":      currentStep,
 				"max_steps": a.MaxSteps,
 			})
@@ -439,7 +453,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 				})
 			})
 			if err != nil {
-				a.emitHook(core.AgentError, hooks.OnError, map[string]any{
+				a.emitHook(core.AgentError, activeHooks.OnError, map[string]any{
 					"error": err.Error(),
 					"step":  currentStep,
 				})
@@ -452,7 +466,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 
 			response, err := a.LLM.InvokeWithTools(messages, toolSchemas, "auto", kwargs)
 			if err != nil {
-				a.emitHook(core.AgentError, hooks.OnError, map[string]any{
+				a.emitHook(core.AgentError, activeHooks.OnError, map[string]any{
 					"error": err.Error(),
 					"step":  currentStep,
 				})
@@ -472,7 +486,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 				if finalAnswer == "" {
 					finalAnswer = "抱歉，我无法回答这个问题。"
 				}
-				a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+				a.emitHook(core.AgentFinish, activeHooks.OnFinish, map[string]any{
 					"result":      finalAnswer,
 					"total_steps": currentStep,
 				})
@@ -491,7 +505,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 				"tool_calls": toOpenAIToolCallsPayload(toolCalls),
 			})
 
-			toolResults := a.executeToolsAsyncStream(toolCalls, currentStep, hooks.OnToolCall)
+			toolResults := a.executeToolsAsyncStream(toolCalls, currentStep, activeHooks.OnToolCall)
 			for _, item := range toolResults {
 				out <- core.NewAgentEvent(core.ToolResult, a.Name, map[string]any{
 					"tool_name":    item.ToolName,
@@ -508,7 +522,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 
 				if item.ToolName == "Finish" {
 					finalAnswer = fmt.Sprintf("%v", item.Result["content"])
-					a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+					a.emitHook(core.AgentFinish, activeHooks.OnFinish, map[string]any{
 						"result":      finalAnswer,
 						"total_steps": currentStep,
 					})
@@ -525,7 +539,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
 				"step": currentStep,
 			})
-			a.emitHook(core.StepFinish, hooks.OnStep, map[string]any{
+			a.emitHook(core.StepFinish, activeHooks.OnStep, map[string]any{
 				"step": currentStep,
 			})
 		}
@@ -533,7 +547,7 @@ func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwa
 		if finalAnswer == "" {
 			finalAnswer = "抱歉，已达到最大步数限制，无法完成任务。"
 		}
-		a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+		a.emitHook(core.AgentFinish, activeHooks.OnFinish, map[string]any{
 			"result":            finalAnswer,
 			"total_steps":       currentStep,
 			"max_steps_reached": true,
@@ -901,26 +915,6 @@ func (a *ReActAgent) handleBuiltinTool(toolName string, arguments map[string]any
 	}
 }
 
-func (a *ReActAgent) GetToolRegistry() *tools.ToolRegistry {
-	return a.ToolRegistry
-}
-
-func (a *ReActAgent) GetMaxSteps() int {
-	return a.MaxSteps
-}
-
-func (a *ReActAgent) SetMaxSteps(v int) {
-	if v <= 0 {
-		return
-	}
-	a.MaxSteps = v
-	a.BaseAgent.MaxSteps = v
-}
-
 func (a *ReActAgent) String() string {
 	return fmt.Sprintf("ReActAgent(name=%s)", a.Name)
-}
-
-func (a *ReActAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, returnSummary bool, maxStepsOverride *int) map[string]any {
-	return runAsSubagent(a, task, toolFilter, returnSummary, maxStepsOverride)
 }

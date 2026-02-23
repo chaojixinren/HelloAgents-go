@@ -273,6 +273,7 @@ func NewPlanSolveAgentWithOptions(
 		Planner:   NewPlanner(llm, plannerPrompt),
 		Executor:  NewExecutor(llm, executorPrompt, toolRegistry, enableToolCalling, maxToolIterations),
 	}
+	base.SetRunDelegate(agent.Run)
 	base.AgentType = "PlanSolveAgent"
 	autoRegisterBuiltinTools(base)
 	return agent, nil
@@ -308,17 +309,18 @@ func (a *PlanSolveAgent) Run(inputText string, kwargs map[string]any) (string, e
 	return finalAnswer, nil
 }
 
-func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
-	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
-}
+func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any, hooks ...core.Hooks) <-chan core.AgentEvent {
+	activeHooks := core.Hooks{}
+	if len(hooks) > 0 {
+		activeHooks = hooks[0]
+	}
 
-func (a *PlanSolveAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 64)
 	go func() {
 		defer close(out)
 
-		if hooks.OnStart != nil {
-			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+		if activeHooks.OnStart != nil {
+			_ = activeHooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 				"input_text": inputText,
 			}))
 		}
@@ -334,8 +336,8 @@ func (a *PlanSolveAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks,
 			for k, v := range extra {
 				payload[k] = v
 			}
-			if hooks.OnError != nil {
-				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, payload))
+			if activeHooks.OnError != nil {
+				_ = activeHooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, payload))
 			}
 			out <- core.NewAgentEvent(core.AgentError, a.Name, payload)
 		}
@@ -466,8 +468,8 @@ func (a *PlanSolveAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks,
 			return
 		}
 
-		if hooks.OnFinish != nil {
-			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+		if activeHooks.OnFinish != nil {
+			_ = activeHooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 				"result":      finalAnswer,
 				"total_steps": len(plan),
 			}))
@@ -483,14 +485,6 @@ func (a *PlanSolveAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks,
 	return out
 }
 
-func (a *PlanSolveAgent) GetToolRegistry() *tools.ToolRegistry {
-	return a.ToolRegistry
-}
-
 func (a *PlanSolveAgent) String() string {
 	return fmt.Sprintf("PlanSolveAgent(name=%s)", a.Name)
-}
-
-func (a *PlanSolveAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, returnSummary bool, maxStepsOverride *int) map[string]any {
-	return runAsSubagent(a, task, toolFilter, returnSummary, maxStepsOverride)
 }

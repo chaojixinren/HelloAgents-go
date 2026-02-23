@@ -22,7 +22,7 @@ import (
 type Agent interface {
 	Run(inputText string, kwargs map[string]any) (string, error)
 	Arun(inputText string, hooks Hooks, kwargs map[string]any) (string, error)
-	ArunStream(inputText string, kwargs map[string]any) <-chan AgentEvent
+	ArunStream(inputText string, kwargs map[string]any, hooks ...Hooks) <-chan AgentEvent
 	AddMessage(message Message)
 	ClearHistory()
 	GetHistory() []Message
@@ -56,10 +56,17 @@ type BaseAgent struct {
 	SkillLoader  *skills.SkillLoader
 	SessionStore *SessionStore
 	summaryLLM   *HelloAgentsLLM
+	runDelegate  func(inputText string, kwargs map[string]any) (string, error)
+	getMaxSteps  func() int
+	setMaxSteps  func(v int)
 
 	HistoryTokenCount int
 	SessionMetadata   map[string]any
 	StartTime         time.Time
+}
+
+type disabledToolEntry struct {
+	Tool tools.Tool
 }
 
 func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config *Config, toolRegistry *tools.ToolRegistry) (*BaseAgent, error) {
@@ -111,6 +118,15 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 			"duration_seconds": 0,
 		},
 	}
+	agent.getMaxSteps = func() int {
+		return agent.MaxSteps
+	}
+	agent.setMaxSteps = func(v int) {
+		if v <= 0 {
+			return
+		}
+		agent.MaxSteps = v
+	}
 
 	if cfg.TraceEnabled {
 		traceLogger, err := observability.NewTraceLogger(cfg.TraceDir, cfg.TraceSanitize, cfg.TraceHTMLIncludeRawResponse)
@@ -148,6 +164,15 @@ func (a *BaseAgent) Run(inputText string, kwargs map[string]any) (string, error)
 	return "", fmt.Errorf("run() not implemented in BaseAgent")
 }
 
+func (a *BaseAgent) SetRunDelegate(runDelegate func(inputText string, kwargs map[string]any) (string, error)) {
+	a.runDelegate = runDelegate
+}
+
+func (a *BaseAgent) SetMaxStepAccessors(getter func() int, setter func(v int)) {
+	a.getMaxSteps = getter
+	a.setMaxSteps = setter
+}
+
 func (a *BaseAgent) Arun(inputText string, hooks Hooks, kwargs map[string]any) (string, error) {
 	if err := a.emitEvent(AgentStart, hooks.OnStart, map[string]any{"input_text": inputText}); err != nil {
 		return "", err
@@ -163,17 +188,34 @@ func (a *BaseAgent) Arun(inputText string, hooks Hooks, kwargs map[string]any) (
 	return result, nil
 }
 
-func (a *BaseAgent) ArunStream(inputText string, kwargs map[string]any) <-chan AgentEvent {
+func (a *BaseAgent) ArunStream(inputText string, kwargs map[string]any, hooks ...Hooks) <-chan AgentEvent {
+	activeHooks := Hooks{}
+	if len(hooks) > 0 {
+		activeHooks = hooks[0]
+	}
+
 	out := make(chan AgentEvent, 2)
 	go func() {
 		defer close(out)
-		out <- NewAgentEvent(AgentStart, a.Name, map[string]any{"input_text": inputText})
+		startEvent := NewAgentEvent(AgentStart, a.Name, map[string]any{"input_text": inputText})
+		if activeHooks.OnStart != nil {
+			_ = activeHooks.OnStart(startEvent)
+		}
+		out <- startEvent
 		result, err := a.Run(inputText, kwargs)
 		if err != nil {
-			out <- NewAgentEvent(AgentError, a.Name, map[string]any{"error": err.Error(), "error_type": "AgentError"})
+			errorEvent := NewAgentEvent(AgentError, a.Name, map[string]any{"error": err.Error(), "error_type": "AgentError"})
+			if activeHooks.OnError != nil {
+				_ = activeHooks.OnError(errorEvent)
+			}
+			out <- errorEvent
 			return
 		}
-		out <- NewAgentEvent(AgentFinish, a.Name, map[string]any{"result": result})
+		finishEvent := NewAgentEvent(AgentFinish, a.Name, map[string]any{"result": result})
+		if activeHooks.OnFinish != nil {
+			_ = activeHooks.OnFinish(finishEvent)
+		}
+		out <- finishEvent
 	}()
 	return out
 }
@@ -743,15 +785,36 @@ func (a *BaseAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, retu
 	originalHistory := a.GetHistory()
 	a.ClearHistory()
 
-	disabledTools, disabledFunctions := a.applyToolFilter(toolFilter)
+	disabledTools := a.applyToolFilter(toolFilter)
 
-	originalMaxSteps := a.MaxSteps
-	if maxStepsOverride != nil && *maxStepsOverride > 0 && a.MaxSteps > 0 {
-		a.MaxSteps = *maxStepsOverride
+	var originalMaxSteps *int
+	applyMaxSteps := func(v int) {
+		if a.setMaxSteps != nil {
+			a.setMaxSteps(v)
+			return
+		}
+		a.MaxSteps = v
+	}
+	currentMaxSteps := func() int {
+		if a.getMaxSteps != nil {
+			return a.getMaxSteps()
+		}
+		return a.MaxSteps
+	}
+	if maxStepsOverride != nil && *maxStepsOverride > 0 {
+		current := currentMaxSteps()
+		if current > 0 {
+			originalMaxSteps = &current
+			applyMaxSteps(*maxStepsOverride)
+		}
 	}
 
 	start := time.Now()
-	result, err := a.Run(task, nil)
+	runner := a.Run
+	if a.runDelegate != nil {
+		runner = a.runDelegate
+	}
+	result, err := runner(task, nil)
 	duration := time.Since(start).Seconds()
 
 	success := err == nil
@@ -770,10 +833,10 @@ func (a *BaseAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, retu
 	}
 	a.HistoryTokenCount = a.TokenCounter.CountMessages(a.HistoryManager.GetHistory())
 
-	a.restoreTools(disabledTools, disabledFunctions)
+	a.restoreTools(disabledTools)
 
-	if originalMaxSteps > 0 {
-		a.MaxSteps = originalMaxSteps
+	if originalMaxSteps != nil {
+		applyMaxSteps(*originalMaxSteps)
 	}
 
 	if returnSummary {
@@ -783,11 +846,10 @@ func (a *BaseAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, retu
 	return map[string]any{"success": success, "result": result, "metadata": metadata}
 }
 
-func (a *BaseAgent) applyToolFilter(toolFilter tools.ToolFilter) (map[string]tools.Tool, map[string]tools.FunctionTool) {
-	disabledTools := map[string]tools.Tool{}
-	disabledFunctions := map[string]tools.FunctionTool{}
+func (a *BaseAgent) applyToolFilter(toolFilter tools.ToolFilter) []disabledToolEntry {
+	disabledTools := make([]disabledToolEntry, 0)
 	if toolFilter == nil || a.ToolRegistry == nil {
-		return disabledTools, disabledFunctions
+		return disabledTools
 	}
 
 	originalTools := a.ToolRegistry.ListTools()
@@ -797,31 +859,30 @@ func (a *BaseAgent) applyToolFilter(toolFilter tools.ToolFilter) (map[string]too
 		allowed[name] = struct{}{}
 	}
 
-	allFunctions := a.ToolRegistry.GetAllFunctions()
 	for _, name := range originalTools {
 		if _, ok := allowed[name]; ok {
 			continue
 		}
 		if tool := a.ToolRegistry.GetTool(name); tool != nil {
-			disabledTools[name] = tool
+			if a.ToolRegistry.DisableTool(name) {
+				disabledTools = append(disabledTools, disabledToolEntry{
+					Tool: tool,
+				})
+			}
 		}
-		if fn, ok := allFunctions[name]; ok {
-			disabledFunctions[name] = fn
-		}
-		a.ToolRegistry.UnregisterTool(name)
 	}
-	return disabledTools, disabledFunctions
+	return disabledTools
 }
 
-func (a *BaseAgent) restoreTools(disabledTools map[string]tools.Tool, disabledFunctions map[string]tools.FunctionTool) {
+func (a *BaseAgent) restoreTools(disabledTools []disabledToolEntry) {
 	if a.ToolRegistry == nil {
 		return
 	}
-	for _, tool := range disabledTools {
-		a.ToolRegistry.RegisterTool(tool, false)
-	}
-	for name, fn := range disabledFunctions {
-		a.ToolRegistry.RegisterFunction(name, fn.Handler, fn.Description)
+	for _, entry := range disabledTools {
+		if entry.Tool == nil {
+			continue
+		}
+		a.ToolRegistry.RegisterTool(entry.Tool, false)
 	}
 }
 

@@ -103,6 +103,7 @@ func NewReflectionAgentWithOptions(
 		EnableToolCalling: enableToolCalling && toolRegistry != nil,
 		MaxToolIterations: maxToolIterations,
 	}
+	base.SetRunDelegate(agent.Run)
 	base.AgentType = "ReflectionAgent"
 	autoRegisterBuiltinTools(base)
 	return agent, nil
@@ -257,21 +258,18 @@ func (a *ReflectionAgent) getLLMResponse(messages []map[string]any, kwargs map[s
 	return "", nil
 }
 
-func (a *ReflectionAgent) GetToolRegistry() *tools.ToolRegistry {
-	return a.ToolRegistry
-}
+func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any, hooks ...core.Hooks) <-chan core.AgentEvent {
+	activeHooks := core.Hooks{}
+	if len(hooks) > 0 {
+		activeHooks = hooks[0]
+	}
 
-func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
-	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
-}
-
-func (a *ReflectionAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 32)
 	go func() {
 		defer close(out)
 
-		if hooks.OnStart != nil {
-			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+		if activeHooks.OnStart != nil {
+			_ = activeHooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 				"input_text": inputText,
 			}))
 		}
@@ -280,8 +278,8 @@ func (a *ReflectionAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks
 		})
 
 		emitError := func(err error) {
-			if hooks.OnError != nil {
-				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+			if activeHooks.OnError != nil {
+				_ = activeHooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 					"error":      err.Error(),
 					"error_type": "AgentError",
 				}))
@@ -384,8 +382,8 @@ func (a *ReflectionAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks
 			currentResponse = refinedResponse
 		}
 
-		if hooks.OnFinish != nil {
-			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+		if activeHooks.OnFinish != nil {
+			_ = activeHooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 				"result":           currentResponse,
 				"total_iterations": a.MaxIterations,
 			}))
@@ -431,8 +429,4 @@ func (a *ReflectionAgent) buildRefinementPrompt(task string, lastAttempt string,
 
 func (a *ReflectionAgent) String() string {
 	return fmt.Sprintf("ReflectionAgent(name=%s)", a.Name)
-}
-
-func (a *ReflectionAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, returnSummary bool, maxStepsOverride *int) map[string]any {
-	return runAsSubagent(a, task, toolFilter, returnSummary, maxStepsOverride)
 }

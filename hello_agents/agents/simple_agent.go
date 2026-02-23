@@ -42,6 +42,7 @@ func NewSimpleAgentWithOptions(
 		EnableToolCalling: enableToolCalling && toolRegistry != nil,
 		MaxToolIterations: maxToolIterations,
 	}
+	base.SetRunDelegate(agent.Run)
 	base.AgentType = "SimpleAgent"
 	autoRegisterBuiltinTools(base)
 	return agent, nil
@@ -240,7 +241,13 @@ func (a *SimpleAgent) RemoveTool(toolName string) bool {
 	if a.ToolRegistry == nil {
 		return false
 	}
-	return a.ToolRegistry.UnregisterTool(toolName)
+	for _, name := range a.ToolRegistry.ListTools() {
+		if name == toolName {
+			a.ToolRegistry.Unregister(toolName)
+			return true
+		}
+	}
+	return false
 }
 
 func (a *SimpleAgent) ListTools() []string {
@@ -252,10 +259,6 @@ func (a *SimpleAgent) ListTools() []string {
 
 func (a *SimpleAgent) HasTools() bool {
 	return a.EnableToolCalling && a.ToolRegistry != nil
-}
-
-func (a *SimpleAgent) GetToolRegistry() *tools.ToolRegistry {
-	return a.ToolRegistry
 }
 
 func (a *SimpleAgent) StreamRun(inputText string, kwargs map[string]any) (<-chan string, <-chan error) {
@@ -289,17 +292,18 @@ func (a *SimpleAgent) StreamRun(inputText string, kwargs map[string]any) (<-chan
 	return out, errOut
 }
 
-func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
-	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
-}
+func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any, hooks ...core.Hooks) <-chan core.AgentEvent {
+	activeHooks := core.Hooks{}
+	if len(hooks) > 0 {
+		activeHooks = hooks[0]
+	}
 
-func (a *SimpleAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 16)
 	go func() {
 		defer close(out)
 
-		if hooks.OnStart != nil {
-			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+		if activeHooks.OnStart != nil {
+			_ = activeHooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 				"input_text": inputText,
 			}))
 		}
@@ -322,8 +326,8 @@ func (a *SimpleAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kw
 			})
 		})
 		if err != nil {
-			if hooks.OnError != nil {
-				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+			if activeHooks.OnError != nil {
+				_ = activeHooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 					"error":      err.Error(),
 					"error_type": "AgentError",
 				}))
@@ -335,8 +339,8 @@ func (a *SimpleAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kw
 			return
 		}
 
-		if hooks.OnFinish != nil {
-			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+		if activeHooks.OnFinish != nil {
+			_ = activeHooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 				"result": fullResponse,
 			}))
 		}
@@ -352,10 +356,6 @@ func (a *SimpleAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kw
 
 func (a *SimpleAgent) String() string {
 	return fmt.Sprintf("SimpleAgent(name=%s)", a.Name)
-}
-
-func (a *SimpleAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, returnSummary bool, maxStepsOverride *int) map[string]any {
-	return runAsSubagent(a, task, toolFilter, returnSummary, maxStepsOverride)
 }
 
 func cloneMapWithoutKeys(source map[string]any, keys ...string) map[string]any {

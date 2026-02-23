@@ -2,7 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"maps"
 )
 
 // ToolFilter controls which tools are exposed to subagents.
@@ -148,10 +147,4 @@ func (f *CustomFilter) IsAllowed(toolName string) bool {
 		}
 	}
 	return true
-}
-
-func cloneSet(in map[string]struct{}) map[string]struct{} {
-	out := map[string]struct{}{}
-	maps.Copy(out, in)
-	return out
 }

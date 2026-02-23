@@ -79,10 +79,7 @@ NewPlanSolveAgent(
 各 Agent 通常提供：
 - `Run(inputText string, kwargs map[string]any) (string, error)`
 - `Arun(inputText string, hooks core.Hooks, kwargs map[string]any) (string, error)`
-- `ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent`
-
-部分 Agent 额外提供：
-- `ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent`
+- `ArunStream(inputText string, kwargs map[string]any, hooks ...core.Hooks) <-chan core.AgentEvent`
 
 ## Tools
 
@@ -104,7 +101,10 @@ type Tool interface {
 
 常用方法：
 - `RegisterTool(tool Tool, autoExpandArgs ...bool)`
-- `RegisterFunction(name string, handler func(input string) ToolResponse, description string)`
+- `RegisterFunction(funcOrName any, args ...any)`  
+  支持两种调用风格：
+  - `RegisterFunction(handler, name?, description?)`
+  - `RegisterFunction(name, description, handler)`
 - `ExecuteTool(name string, inputText string) ToolResponse`
 - `ListTools() []string`
 
