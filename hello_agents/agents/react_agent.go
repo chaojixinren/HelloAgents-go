@@ -104,6 +104,7 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 	}
 
 	currentStep := 0
+	totalTokens := 0
 	for currentStep < a.MaxSteps {
 		currentStep++
 
@@ -119,13 +120,16 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 			break
 		}
 
+		usage := usageFromLLMRawResponse(response)
+		totalTokens += intFromAny(usage["total_tokens"])
+
 		content, toolCalls := extractToolCallsAndContent(response)
 		if a.TraceLogger != nil {
 			step := currentStep
 			a.TraceLogger.LogEvent("model_output", map[string]any{
 				"content":    content,
 				"tool_calls": len(toolCalls),
-				"usage":      usageFromLLMRawResponse(response),
+				"usage":      usage,
 			}, &step)
 		}
 		if len(toolCalls) == 0 {
@@ -133,6 +137,8 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 			if finalAnswer == "" {
 				finalAnswer = "抱歉，我无法回答这个问题。"
 			}
+			a.SessionMetadata["total_steps"] = currentStep
+			a.SessionMetadata["total_tokens"] = totalTokens
 			a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 			a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
 			if a.TraceLogger != nil {
@@ -188,6 +194,8 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 					}, &step)
 				}
 				if toolCall.Name == "Finish" && result.Finished {
+					a.SessionMetadata["total_steps"] = currentStep
+					a.SessionMetadata["total_tokens"] = totalTokens
 					a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 					a.AddMessage(core.NewMessage(result.FinalAnswer, core.MessageRoleAssistant, nil))
 					if a.TraceLogger != nil {
@@ -227,6 +235,8 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 	}
 
 	finalAnswer := "抱歉，我无法在限定步数内完成这个任务。"
+	a.SessionMetadata["total_steps"] = currentStep
+	a.SessionMetadata["total_tokens"] = totalTokens
 	a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 	a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
 	if a.TraceLogger != nil {
@@ -292,6 +302,8 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 				finalAnswer = "抱歉，我无法回答这个问题。"
 			}
 
+			a.SessionMetadata["total_steps"] = currentStep
+			a.SessionMetadata["total_tokens"] = totalTokens
 			a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 			a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
 
@@ -326,6 +338,8 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 				if finalAnswer == "" || finalAnswer == "<nil>" {
 					finalAnswer = fmt.Sprintf("%v", item.Result["content"])
 				}
+				a.SessionMetadata["total_steps"] = currentStep
+				a.SessionMetadata["total_tokens"] = totalTokens
 				a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 				a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
 
@@ -361,6 +375,8 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 	}
 
 	finalAnswer := "抱歉，我无法在限定步数内完成这个任务。"
+	a.SessionMetadata["total_steps"] = currentStep
+	a.SessionMetadata["total_tokens"] = totalTokens
 	a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
 	a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
 
@@ -385,10 +401,17 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 }
 
 func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
+}
+
+func (a *ReActAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 64)
 	go func() {
 		defer close(out)
 
+		a.emitHook(core.AgentStart, hooks.OnStart, map[string]any{
+			"input_text": inputText,
+		})
 		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 			"input_text": inputText,
 		})
@@ -400,6 +423,10 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 
 		for currentStep < a.MaxSteps {
 			currentStep++
+			a.emitHook(core.StepStart, hooks.OnStep, map[string]any{
+				"step":      currentStep,
+				"max_steps": a.MaxSteps,
+			})
 			out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
 				"step":      currentStep,
 				"max_steps": a.MaxSteps,
@@ -412,6 +439,10 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 				})
 			})
 			if err != nil {
+				a.emitHook(core.AgentError, hooks.OnError, map[string]any{
+					"error": err.Error(),
+					"step":  currentStep,
+				})
 				out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 					"error": err.Error(),
 					"step":  currentStep,
@@ -421,6 +452,10 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 
 			response, err := a.LLM.InvokeWithTools(messages, toolSchemas, "auto", kwargs)
 			if err != nil {
+				a.emitHook(core.AgentError, hooks.OnError, map[string]any{
+					"error": err.Error(),
+					"step":  currentStep,
+				})
 				out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 					"error": err.Error(),
 					"step":  currentStep,
@@ -437,6 +472,10 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 				if finalAnswer == "" {
 					finalAnswer = "抱歉，我无法回答这个问题。"
 				}
+				a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+					"result":      finalAnswer,
+					"total_steps": currentStep,
+				})
 				out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 					"result":      finalAnswer,
 					"total_steps": currentStep,
@@ -452,7 +491,7 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 				"tool_calls": toOpenAIToolCallsPayload(toolCalls),
 			})
 
-			toolResults := a.executeToolsAsyncStream(toolCalls, currentStep, nil)
+			toolResults := a.executeToolsAsyncStream(toolCalls, currentStep, hooks.OnToolCall)
 			for _, item := range toolResults {
 				out <- core.NewAgentEvent(core.ToolResult, a.Name, map[string]any{
 					"tool_name":    item.ToolName,
@@ -468,10 +507,11 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 				})
 
 				if item.ToolName == "Finish" {
-					finalAnswer = fmt.Sprintf("%v", item.Result["final_answer"])
-					if finalAnswer == "" || finalAnswer == "<nil>" {
-						finalAnswer = fmt.Sprintf("%v", item.Result["content"])
-					}
+					finalAnswer = fmt.Sprintf("%v", item.Result["content"])
+					a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+						"result":      finalAnswer,
+						"total_steps": currentStep,
+					})
 					out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 						"result":      finalAnswer,
 						"total_steps": currentStep,
@@ -485,11 +525,19 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan 
 			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
 				"step": currentStep,
 			})
+			a.emitHook(core.StepFinish, hooks.OnStep, map[string]any{
+				"step": currentStep,
+			})
 		}
 
 		if finalAnswer == "" {
 			finalAnswer = "抱歉，已达到最大步数限制，无法完成任务。"
 		}
+		a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+			"result":            finalAnswer,
+			"total_steps":       currentStep,
+			"max_steps_reached": true,
+		})
 		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 			"result":            finalAnswer,
 			"total_steps":       currentStep,
@@ -641,7 +689,128 @@ func (a *ReActAgent) executeToolsAsyncStream(
 	currentStep int,
 	onToolCall core.LifecycleHook,
 ) []reactToolExecutionResult {
-	return a.executeToolsAsync(toolCalls, currentStep, onToolCall)
+	results := make([]reactToolExecutionResult, 0, len(toolCalls))
+	builtinCalls := make([]toolCallEnvelope, 0)
+	userCalls := make([]toolCallEnvelope, 0)
+
+	for _, tc := range toolCalls {
+		if _, ok := a.builtinTools[tc.Name]; ok {
+			builtinCalls = append(builtinCalls, tc)
+		} else {
+			userCalls = append(userCalls, tc)
+		}
+	}
+
+	// Stream version keeps parity with python: builtin tools use stream-specific content.
+	for _, tc := range builtinCalls {
+		args := tc.Arguments
+		if args == nil {
+			args = map[string]any{}
+		}
+		if tc.ParseError != "" {
+			results = append(results, reactToolExecutionResult{
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+				Result: map[string]any{
+					"content": "错误：参数格式不正确 - " + tc.ParseError,
+				},
+			})
+			continue
+		}
+
+		a.emitHook(core.ToolCall, onToolCall, map[string]any{
+			"tool_name":    tc.Name,
+			"tool_call_id": tc.ID,
+			"args":         args,
+			"step":         currentStep,
+		})
+
+		resultContent := ""
+		switch tc.Name {
+		case "Thought":
+			reasoning, _ := args["reasoning"].(string)
+			resultContent = "已记录推理过程: " + reasoning
+		case "Finish":
+			answer, _ := args["answer"].(string)
+			resultContent = answer
+		default:
+			resultContent = "未知的内置工具: " + tc.Name
+		}
+
+		results = append(results, reactToolExecutionResult{
+			ToolName:   tc.Name,
+			ToolCallID: tc.ID,
+			Result: map[string]any{
+				"content": resultContent,
+			},
+		})
+	}
+
+	if len(userCalls) == 0 {
+		return results
+	}
+
+	maxConcurrent := a.Config.MaxConcurrentTools
+	if maxConcurrent <= 0 {
+		maxConcurrent = 3
+	}
+	sem := make(chan struct{}, maxConcurrent)
+	ordered := make([]reactToolExecutionResult, len(userCalls))
+	var wg sync.WaitGroup
+
+	for i, tc := range userCalls {
+		wg.Add(1)
+		go func(idx int, call toolCallEnvelope) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			args := call.Arguments
+			if args == nil {
+				args = map[string]any{}
+			}
+			if call.ParseError != "" {
+				ordered[idx] = reactToolExecutionResult{
+					ToolName:   call.Name,
+					ToolCallID: call.ID,
+					Result: map[string]any{
+						"content": "错误：参数格式不正确 - " + call.ParseError,
+					},
+				}
+				return
+			}
+
+			a.emitHook(core.ToolCall, onToolCall, map[string]any{
+				"tool_name":    call.Name,
+				"tool_call_id": call.ID,
+				"args":         args,
+				"step":         currentStep,
+			})
+
+			resultContent := fmt.Sprintf("❌ 工具 %s 不存在", call.Name)
+			if a.ToolRegistry != nil {
+				if tool := a.ToolRegistry.GetTool(call.Name); tool != nil {
+					toolResponse := tool.ARunWithTiming(args)
+					resultContent = toolResponse.Text
+					if a.Truncator != nil {
+						preview, _ := a.Truncator.Truncate(resultContent, call.Name)
+						resultContent = preview
+					}
+				}
+			}
+
+			ordered[idx] = reactToolExecutionResult{
+				ToolName:   call.Name,
+				ToolCallID: call.ID,
+				Result: map[string]any{
+					"content": resultContent,
+				},
+			}
+		}(i, tc)
+	}
+	wg.Wait()
+	results = append(results, ordered...)
+	return results
 }
 
 func (a *ReActAgent) emitHook(eventType core.EventType, hook core.LifecycleHook, data map[string]any) {
@@ -667,12 +836,9 @@ func toBool(v any) bool {
 }
 
 func (a *ReActAgent) buildMessages(inputText string) []map[string]any {
-	messages := make([]map[string]any, 0, len(a.GetHistory())+2)
+	messages := make([]map[string]any, 0, 2)
 	if a.SystemPrompt != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": a.SystemPrompt})
-	}
-	for _, msg := range a.GetHistory() {
-		messages = append(messages, map[string]any{"role": msg.Role, "content": msg.Content})
 	}
 	messages = append(messages, map[string]any{"role": "user", "content": inputText})
 	return messages

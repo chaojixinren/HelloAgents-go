@@ -31,6 +31,8 @@ type Tool interface {
 	GetParameters() []ToolParameter
 	Run(parameters map[string]any) ToolResponse
 	RunWithTiming(parameters map[string]any) ToolResponse
+	ARun(parameters map[string]any) ToolResponse
+	ARunWithTiming(parameters map[string]any) ToolResponse
 }
 
 // BaseTool provides reusable defaults.

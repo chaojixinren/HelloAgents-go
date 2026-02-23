@@ -236,15 +236,42 @@ type PlanSolveAgent struct {
 type PlanAndSolveAgent = PlanSolveAgent
 
 func NewPlanSolveAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, config *core.Config, toolRegistry *tools.ToolRegistry) (*PlanSolveAgent, error) {
+	return NewPlanSolveAgentWithOptions(
+		name,
+		llm,
+		systemPrompt,
+		config,
+		"",
+		"",
+		toolRegistry,
+		true,
+		3,
+	)
+}
+
+func NewPlanSolveAgentWithOptions(
+	name string,
+	llm *core.HelloAgentsLLM,
+	systemPrompt string,
+	config *core.Config,
+	plannerPrompt string,
+	executorPrompt string,
+	toolRegistry *tools.ToolRegistry,
+	enableToolCalling bool,
+	maxToolIterations int,
+) (*PlanSolveAgent, error) {
 	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
 	if err != nil {
 		return nil, err
 	}
+	if maxToolIterations <= 0 {
+		maxToolIterations = 3
+	}
 
 	agent := &PlanSolveAgent{
 		BaseAgent: base,
-		Planner:   NewPlanner(llm, ""),
-		Executor:  NewExecutor(llm, "", toolRegistry, true, 3),
+		Planner:   NewPlanner(llm, plannerPrompt),
+		Executor:  NewExecutor(llm, executorPrompt, toolRegistry, enableToolCalling, maxToolIterations),
 	}
 	base.AgentType = "PlanSolveAgent"
 	autoRegisterBuiltinTools(base)
@@ -282,10 +309,19 @@ func (a *PlanSolveAgent) Run(inputText string, kwargs map[string]any) (string, e
 }
 
 func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
+}
+
+func (a *PlanSolveAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 64)
 	go func() {
 		defer close(out)
 
+		if hooks.OnStart != nil {
+			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+				"input_text": inputText,
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 			"input_text": inputText,
 		})
@@ -297,6 +333,9 @@ func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any) <-c
 			}
 			for k, v := range extra {
 				payload[k] = v
+			}
+			if hooks.OnError != nil {
+				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, payload))
 			}
 			out <- core.NewAgentEvent(core.AgentError, a.Name, payload)
 		}
@@ -427,6 +466,12 @@ func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any) <-c
 			return
 		}
 
+		if hooks.OnFinish != nil {
+			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+				"result":      finalAnswer,
+				"total_steps": len(plan),
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 			"result":      finalAnswer,
 			"total_steps": len(plan),

@@ -21,7 +21,11 @@ type TaskTool struct {
 }
 
 func NewTaskTool(agentFactory AgentFactory, toolRegistry *tools.ToolRegistry) *TaskTool {
-	base := tools.NewBaseTool("Task", "启动子代理处理特定的子任务，使用隔离的上下文。", false)
+	base := tools.NewBaseTool(
+		"Task",
+		"启动子代理处理特定的子任务，使用隔离的上下文。适用于：探索代码库、规划任务、实现功能等需要独立上下文的场景。",
+		false,
+	)
 	base.Parameters = map[string]tools.ToolParameter{
 		"task": {
 			Name:        "task",
@@ -32,14 +36,14 @@ func NewTaskTool(agentFactory AgentFactory, toolRegistry *tools.ToolRegistry) *T
 		"agent_type": {
 			Name:        "agent_type",
 			Type:        "string",
-			Description: "子代理类型：react/reflection/plan/simple",
+			Description: "子代理类型：react（推理行动）、reflection（反思）、plan（规划）、simple（简单对话）",
 			Required:    false,
 			Default:     "react",
 		},
 		"tool_filter": {
 			Name:        "tool_filter",
 			Type:        "string",
-			Description: "工具过滤策略：readonly/full/none",
+			Description: "工具过滤策略：readonly（只读工具）、full（完全访问）、none（无过滤）",
 			Required:    false,
 			Default:     "none",
 		},

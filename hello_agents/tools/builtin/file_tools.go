@@ -19,10 +19,18 @@ type ReadTool struct {
 }
 
 func NewReadTool(projectRoot string, registry *tools.ToolRegistry) *ReadTool {
+	return NewReadToolWithOptions(projectRoot, "", registry)
+}
+
+func NewReadToolWithOptions(projectRoot string, workingDir string, registry *tools.ToolRegistry) *ReadTool {
 	if projectRoot == "" {
 		projectRoot = "."
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
+	absWorkingDir := absRoot
+	if strings.TrimSpace(workingDir) != "" {
+		absWorkingDir, _ = filepath.Abs(workingDir)
+	}
 	base := tools.NewBaseTool("Read", "读取文件内容或列出目录内容，支持行号范围和元数据缓存", false)
 	base.Parameters = map[string]tools.ToolParameter{
 		"path": {
@@ -46,7 +54,12 @@ func NewReadTool(projectRoot string, registry *tools.ToolRegistry) *ReadTool {
 			Default:     2000,
 		},
 	}
-	return &ReadTool{BaseTool: base, ProjectRoot: absRoot, WorkingDir: absRoot, Registry: registry}
+	return &ReadTool{
+		BaseTool:    base,
+		ProjectRoot: absRoot,
+		WorkingDir:  absWorkingDir,
+		Registry:    registry,
+	}
 }
 
 func (t *ReadTool) GetParameters() []tools.ToolParameter {
@@ -234,17 +247,30 @@ type WriteTool struct {
 }
 
 func NewWriteTool(projectRoot string) *WriteTool {
+	return NewWriteToolWithOptions(projectRoot, "", nil)
+}
+
+func NewWriteToolWithOptions(projectRoot string, workingDir string, registry *tools.ToolRegistry) *WriteTool {
 	if projectRoot == "" {
 		projectRoot = "."
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
+	absWorkingDir := absRoot
+	if strings.TrimSpace(workingDir) != "" {
+		absWorkingDir, _ = filepath.Abs(workingDir)
+	}
 	base := tools.NewBaseTool("Write", "创建或覆盖文件，支持冲突检测和原子写入", false)
 	base.Parameters = map[string]tools.ToolParameter{
 		"path":          {Name: "path", Type: "string", Description: "文件路径（相对项目根目录）", Required: true},
 		"content":       {Name: "content", Type: "string", Description: "文件内容", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &WriteTool{BaseTool: base, ProjectRoot: absRoot, WorkingDir: absRoot}
+	return &WriteTool{
+		BaseTool:    base,
+		ProjectRoot: absRoot,
+		WorkingDir:  absWorkingDir,
+		Registry:    registry,
+	}
 }
 
 func (t *WriteTool) GetParameters() []tools.ToolParameter {
@@ -334,10 +360,18 @@ type EditTool struct {
 }
 
 func NewEditTool(projectRoot string) *EditTool {
+	return NewEditToolWithOptions(projectRoot, "", nil)
+}
+
+func NewEditToolWithOptions(projectRoot string, workingDir string, registry *tools.ToolRegistry) *EditTool {
 	if projectRoot == "" {
 		projectRoot = "."
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
+	absWorkingDir := absRoot
+	if strings.TrimSpace(workingDir) != "" {
+		absWorkingDir, _ = filepath.Abs(workingDir)
+	}
 	base := tools.NewBaseTool("Edit", "精确替换文件内容，支持冲突检测和自动备份", false)
 	base.Parameters = map[string]tools.ToolParameter{
 		"path":          {Name: "path", Type: "string", Description: "要编辑的文件路径（相对项目根目录）", Required: true},
@@ -345,7 +379,12 @@ func NewEditTool(projectRoot string) *EditTool {
 		"new_string":    {Name: "new_string", Type: "string", Description: "替换后的内容", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &EditTool{BaseTool: base, ProjectRoot: absRoot, WorkingDir: absRoot}
+	return &EditTool{
+		BaseTool:    base,
+		ProjectRoot: absRoot,
+		WorkingDir:  absWorkingDir,
+		Registry:    registry,
+	}
 }
 
 func (t *EditTool) GetParameters() []tools.ToolParameter {
@@ -453,17 +492,30 @@ type MultiEditTool struct {
 }
 
 func NewMultiEditTool(projectRoot string) *MultiEditTool {
+	return NewMultiEditToolWithOptions(projectRoot, "", nil)
+}
+
+func NewMultiEditToolWithOptions(projectRoot string, workingDir string, registry *tools.ToolRegistry) *MultiEditTool {
 	if projectRoot == "" {
 		projectRoot = "."
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
+	absWorkingDir := absRoot
+	if strings.TrimSpace(workingDir) != "" {
+		absWorkingDir, _ = filepath.Abs(workingDir)
+	}
 	base := tools.NewBaseTool("MultiEdit", "批量替换文件内容，支持原子性和冲突检测", false)
 	base.Parameters = map[string]tools.ToolParameter{
 		"path":          {Name: "path", Type: "string", Description: "要编辑的文件路径（相对项目根目录）", Required: true},
 		"edits":         {Name: "edits", Type: "array", Description: "替换列表，每项包含 old_string 和 new_string", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &MultiEditTool{BaseTool: base, ProjectRoot: absRoot, WorkingDir: absRoot}
+	return &MultiEditTool{
+		BaseTool:    base,
+		ProjectRoot: absRoot,
+		WorkingDir:  absWorkingDir,
+		Registry:    registry,
+	}
 }
 
 func (t *MultiEditTool) GetParameters() []tools.ToolParameter {

@@ -1,6 +1,9 @@
 package tools
 
-import "maps"
+import (
+	"fmt"
+	"maps"
+)
 
 // ToolFilter controls which tools are exposed to subagents.
 type ToolFilter interface {
@@ -15,9 +18,14 @@ type ReadOnlyFilter struct {
 func NewReadOnlyFilter(additionalAllowed []string) *ReadOnlyFilter {
 	base := map[string]struct{}{
 		"Read":      {},
-		"Grep":      {},
+		"ReadTool":  {},
 		"LS":        {},
+		"LSTool":    {},
 		"Glob":      {},
+		"GlobTool":  {},
+		"Grep":      {},
+		"GrepTool":  {},
+		"Skill":     {},
 		"SkillTool": {},
 	}
 	for _, t := range additionalAllowed {
@@ -46,7 +54,14 @@ type FullAccessFilter struct {
 }
 
 func NewFullAccessFilter(additionalDenied []string) *FullAccessFilter {
-	base := map[string]struct{}{}
+	base := map[string]struct{}{
+		"Bash":         {},
+		"BashTool":     {},
+		"Terminal":     {},
+		"TerminalTool": {},
+		"Execute":      {},
+		"ExecuteTool":  {},
+	}
 	for _, t := range additionalDenied {
 		base[t] = struct{}{}
 	}
@@ -71,9 +86,26 @@ func (f *FullAccessFilter) IsAllowed(toolName string) bool {
 type CustomFilter struct {
 	allowed map[string]struct{}
 	denied  map[string]struct{}
+	mode    string
 }
 
 func NewCustomFilter(allowed []string, denied []string) *CustomFilter {
+	filter, err := NewCustomFilterWithMode(allowed, denied, "whitelist")
+	if err != nil {
+		return &CustomFilter{
+			allowed: map[string]struct{}{},
+			denied:  map[string]struct{}{},
+			mode:    "whitelist",
+		}
+	}
+	return filter
+}
+
+func NewCustomFilterWithMode(allowed []string, denied []string, mode string) (*CustomFilter, error) {
+	if mode != "whitelist" && mode != "blacklist" {
+		return nil, fmt.Errorf("invalid mode: %s. must be 'whitelist' or 'blacklist'", mode)
+	}
+
 	allowSet := map[string]struct{}{}
 	for _, t := range allowed {
 		allowSet[t] = struct{}{}
@@ -82,7 +114,11 @@ func NewCustomFilter(allowed []string, denied []string) *CustomFilter {
 	for _, t := range denied {
 		denySet[t] = struct{}{}
 	}
-	return &CustomFilter{allowed: allowSet, denied: denySet}
+	return &CustomFilter{
+		allowed: allowSet,
+		denied:  denySet,
+		mode:    mode,
+	}, nil
 }
 
 func (f *CustomFilter) Filter(allTools []string) []string {
@@ -96,14 +132,22 @@ func (f *CustomFilter) Filter(allTools []string) []string {
 }
 
 func (f *CustomFilter) IsAllowed(toolName string) bool {
+	if f.mode == "blacklist" {
+		_, denied := f.denied[toolName]
+		return !denied
+	}
+
+	// Default whitelist behavior (parity with Python).
+	if len(f.allowed) == 0 {
+		return false
+	}
 	if len(f.allowed) > 0 {
 		_, ok := f.allowed[toolName]
 		if !ok {
 			return false
 		}
 	}
-	_, denied := f.denied[toolName]
-	return !denied
+	return true
 }
 
 func cloneSet(in map[string]struct{}) map[string]struct{} {

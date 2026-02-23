@@ -30,6 +30,6 @@ type CalculatorTool = builtin.CalculatorTool
 
 var GlobalRegistry = tools.GlobalRegistry
 
-func Calculate(expression string) string {
+func Calculate(expression string) tools.ToolResponse {
 	return builtin.Calculate(expression)
 }

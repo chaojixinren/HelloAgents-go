@@ -18,14 +18,29 @@ type SimpleAgent struct {
 }
 
 func NewSimpleAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, config *core.Config, toolRegistry *tools.ToolRegistry) (*SimpleAgent, error) {
+	return NewSimpleAgentWithOptions(name, llm, systemPrompt, config, toolRegistry, true, 3)
+}
+
+func NewSimpleAgentWithOptions(
+	name string,
+	llm *core.HelloAgentsLLM,
+	systemPrompt string,
+	config *core.Config,
+	toolRegistry *tools.ToolRegistry,
+	enableToolCalling bool,
+	maxToolIterations int,
+) (*SimpleAgent, error) {
 	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
 	if err != nil {
 		return nil, err
 	}
+	if maxToolIterations <= 0 {
+		maxToolIterations = 3
+	}
 	agent := &SimpleAgent{
 		BaseAgent:         base,
-		EnableToolCalling: toolRegistry != nil,
-		MaxToolIterations: 3,
+		EnableToolCalling: enableToolCalling && toolRegistry != nil,
+		MaxToolIterations: maxToolIterations,
 	}
 	base.AgentType = "SimpleAgent"
 	autoRegisterBuiltinTools(base)
@@ -275,10 +290,19 @@ func (a *SimpleAgent) StreamRun(inputText string, kwargs map[string]any) (<-chan
 }
 
 func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
+}
+
+func (a *SimpleAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 16)
 	go func() {
 		defer close(out)
 
+		if hooks.OnStart != nil {
+			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+				"input_text": inputText,
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 			"input_text": inputText,
 		})
@@ -298,6 +322,12 @@ func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any) <-chan
 			})
 		})
 		if err != nil {
+			if hooks.OnError != nil {
+				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+					"error":      err.Error(),
+					"error_type": "AgentError",
+				}))
+			}
 			out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 				"error":      err.Error(),
 				"error_type": "AgentError",
@@ -305,6 +335,11 @@ func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any) <-chan
 			return
 		}
 
+		if hooks.OnFinish != nil {
+			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+				"result": fullResponse,
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 			"result": fullResponse,
 		})

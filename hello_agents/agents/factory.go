@@ -12,9 +12,6 @@ func CreateAgent(agentType string, name string, llm *core.HelloAgentsLLM, toolRe
 	if llm == nil {
 		return nil, fmt.Errorf("llm is required")
 	}
-	if name == "" {
-		name = strings.ToLower(agentType) + "_agent"
-	}
 
 	switch strings.ToLower(agentType) {
 	case "react":
@@ -24,7 +21,8 @@ func CreateAgent(agentType string, name string, llm *core.HelloAgentsLLM, toolRe
 	case "plan":
 		return NewPlanSolveAgent(name, llm, systemPrompt, config, toolRegistry)
 	case "simple":
-		return NewSimpleAgent(name, llm, systemPrompt, config, toolRegistry)
+		// Keep parity with python factory: simple branch does not pass tool_registry.
+		return NewSimpleAgent(name, llm, systemPrompt, config, nil)
 	default:
 		return nil, fmt.Errorf("不支持的 agent_type: %s。支持的类型: react, reflection, plan, simple", agentType)
 	}
@@ -69,7 +67,7 @@ func getSystemPromptForType(agentType string) string {
 - 先给出初步方案
 - 反思并改进方案
 - 输出最终优化结果`
-	case "plan", "plan_solve", "plan-and-solve", "planandsolve", "plan_and_solve":
+	case "plan":
 		return `你是一个任务规划专家。
 
 目标：将复杂任务分解为可执行的步骤。

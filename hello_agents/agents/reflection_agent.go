@@ -69,6 +69,19 @@ type ReflectionAgent struct {
 }
 
 func NewReflectionAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, config *core.Config, toolRegistry *tools.ToolRegistry) (*ReflectionAgent, error) {
+	return NewReflectionAgentWithOptions(name, llm, systemPrompt, config, 3, toolRegistry, true, 3)
+}
+
+func NewReflectionAgentWithOptions(
+	name string,
+	llm *core.HelloAgentsLLM,
+	systemPrompt string,
+	config *core.Config,
+	maxIterations int,
+	toolRegistry *tools.ToolRegistry,
+	enableToolCalling bool,
+	maxToolIterations int,
+) (*ReflectionAgent, error) {
 	if systemPrompt == "" {
 		systemPrompt = defaultReflectionSystemPrompt
 	}
@@ -76,13 +89,19 @@ func NewReflectionAgent(name string, llm *core.HelloAgentsLLM, systemPrompt stri
 	if err != nil {
 		return nil, err
 	}
+	if maxIterations <= 0 {
+		maxIterations = 3
+	}
+	if maxToolIterations <= 0 {
+		maxToolIterations = 3
+	}
 
 	agent := &ReflectionAgent{
 		BaseAgent:         base,
-		MaxIterations:     3,
+		MaxIterations:     maxIterations,
 		Memory:            newReflectionMemory(),
-		EnableToolCalling: toolRegistry != nil,
-		MaxToolIterations: 3,
+		EnableToolCalling: enableToolCalling && toolRegistry != nil,
+		MaxToolIterations: maxToolIterations,
 	}
 	base.AgentType = "ReflectionAgent"
 	autoRegisterBuiltinTools(base)
@@ -243,15 +262,30 @@ func (a *ReflectionAgent) GetToolRegistry() *tools.ToolRegistry {
 }
 
 func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	return a.ArunStreamWithHooks(inputText, core.Hooks{}, kwargs)
+}
+
+func (a *ReflectionAgent) ArunStreamWithHooks(inputText string, hooks core.Hooks, kwargs map[string]any) <-chan core.AgentEvent {
 	out := make(chan core.AgentEvent, 32)
 	go func() {
 		defer close(out)
 
+		if hooks.OnStart != nil {
+			_ = hooks.OnStart(core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+				"input_text": inputText,
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
 			"input_text": inputText,
 		})
 
 		emitError := func(err error) {
+			if hooks.OnError != nil {
+				_ = hooks.OnError(core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+					"error":      err.Error(),
+					"error_type": "AgentError",
+				}))
+			}
 			out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
 				"error":      err.Error(),
 				"error_type": "AgentError",
@@ -350,6 +384,12 @@ func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any) <-
 			currentResponse = refinedResponse
 		}
 
+		if hooks.OnFinish != nil {
+			_ = hooks.OnFinish(core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+				"result":           currentResponse,
+				"total_iterations": a.MaxIterations,
+			}))
+		}
 		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
 			"result":           currentResponse,
 			"total_iterations": a.MaxIterations,

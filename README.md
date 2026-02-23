@@ -1,18 +1,23 @@
 # HelloAgents-Go
 
-> 🤖 从零开始构建的多智能体框架 - 轻量级、原生、教学友好（Go语言版本）
+> HelloAgents Python 版本的 Go 语言实现，保持模块与功能语义对齐。
 
 [![Go 1.21+](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://golang.org/dl/)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
-[![Development Status](https://img.shields.io/badge/status-in_development-yellow.svg)](https://github.com/your-repo/helloagents-go)
 
-> ⚠️ **注意**: 本项目目前处于**积极开发阶段**，API 可能会发生变动。
+> ⚠️ 项目仍在迭代中，API 可能继续演进。
 
-HelloAgents-Go 是 [HelloAgents](https://github.com/jjyaoao/HelloAgents) Python 版本的 Go 语言实现，基于 OpenAI 原生 API 构建的多智能体框架。
+## 项目说明
 
-## 🚀 快速开始
+HelloAgents-Go 目标是对齐 [HelloAgents](https://github.com/jjyaoao/HelloAgents) Python 版，在 Go 中提供：
+- 多 Agent 范式（Simple / ReAct / Reflection / PlanSolve）
+- 工具系统（注册、执行、熔断、过滤）
+- 会话持久化与 Trace 观测
+- Skills、Task/TodoWrite/DevLog 等能力
 
-### 安装
+## 快速开始
+
+### 1. 安装
 
 ```bash
 git clone https://github.com/your-repo/helloagents-go.git
@@ -20,59 +25,62 @@ cd helloagents-go
 go mod download
 ```
 
-### 环境配置
-
-创建 `.env` 文件：
+### 2. 配置 `.env`
 
 ```bash
 LLM_MODEL_ID=your-model-name
 LLM_API_KEY=your-api-key
 LLM_BASE_URL=your-api-base-url
+LLM_TIMEOUT=60
 ```
 
-### 基本使用
+### 3. 最小示例
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
+	"fmt"
+	"log"
 
-    "helloagents-go/HelloAgents-go/agents"
-    "helloagents-go/HelloAgents-go/core"
+	"helloagents-go/hello_agents/agents"
+	"helloagents-go/hello_agents/core"
 )
 
 func main() {
-    llm, _ := core.NewHelloAgentsLLM("", "", "", "", 0.7, nil, nil)
-    agent := agents.NewSimpleAgent("AI助手", llm, "你是一个有用的AI助手", nil)
-    response, _ := agent.Run(context.Background(), "你好！")
-    fmt.Println(response)
+	llm, err := core.NewHelloAgentsLLM("", "", "", 0.7, nil, nil, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent, err := agents.NewSimpleAgent("assistant", llm, "你是一个有用的AI助手", nil, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	out, err := agent.Run("你好！", nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(out)
 }
 ```
 
-## ⚙️ 支持的 LLM 提供商
+## 文档
 
-| 提供商 | 环境变量 |
-|--------|----------|
-| OpenAI | `OPENAI_API_KEY` |
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| 通义千问 | `DASHSCOPE_API_KEY` |
-| ModelScope | `MODELSCOPE_API_KEY` |
-| Kimi | `KIMI_API_KEY` |
-| 智谱AI | `ZHIPU_API_KEY` |
-| Ollama | `OLLAMA_HOST` |
+- [文档总览](docs/overview.md)
+- [系统架构](docs/system-architecture.md)
+- [开发指南](docs/development-guide.md)
+- [API 参考](docs/api-reference.md)
+- [贡献指南](docs/contributing.md)
+- [社区行为准则](docs/code-of-conduct.md)
+- [安全策略](docs/security-policy.md)
 
-## 🤝 贡献
-
-欢迎贡献代码、报告问题或提出建议！
-
-## 📄 许可证
+## 许可证
 
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 
-## 🙏 致谢
+## 致谢
 
 - [HelloAgents Python 版本](https://github.com/jjyaoao/HelloAgents)
 - [Datawhale Hello-Agents 教程](https://github.com/datawhalechina/hello-agents)

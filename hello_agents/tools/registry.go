@@ -44,9 +44,13 @@ func NewToolRegistry(circuitBreaker *CircuitBreaker) *ToolRegistry {
 	}
 }
 
-func (r *ToolRegistry) RegisterTool(tool Tool, autoExpand bool) {
+func (r *ToolRegistry) RegisterTool(tool Tool, autoExpandArgs ...bool) {
 	if tool == nil {
 		return
+	}
+	autoExpand := true
+	if len(autoExpandArgs) > 0 {
+		autoExpand = autoExpandArgs[0]
 	}
 
 	r.mu.Lock()

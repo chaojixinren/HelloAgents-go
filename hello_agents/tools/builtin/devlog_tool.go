@@ -1,10 +1,13 @@
 package builtin
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +24,16 @@ var CATEGORIES = map[string]string{
 	"performance": "性能优化记录",
 }
 
+var categoryOrder = []string{
+	"decision",
+	"progress",
+	"issue",
+	"solution",
+	"refactor",
+	"test",
+	"performance",
+}
+
 type DevLogEntry struct {
 	ID        string         `json:"id"`
 	Timestamp string         `json:"timestamp"`
@@ -34,7 +47,7 @@ func NewDevLogEntry(category, content string, metadata map[string]any) DevLogEnt
 		metadata = map[string]any{}
 	}
 	return DevLogEntry{
-		ID:        fmt.Sprintf("log-%x", time.Now().UnixNano())[:12],
+		ID:        "log-" + randomHex(4),
 		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Category:  category,
 		Content:   content,
@@ -66,7 +79,13 @@ func DevLogEntryFromMap(data map[string]any) DevLogEntry {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	return DevLogEntry{ID: id, Timestamp: timestamp, Category: category, Content: content, Metadata: metadata}
+	return DevLogEntry{
+		ID:        id,
+		Timestamp: timestamp,
+		Category:  category,
+		Content:   content,
+		Metadata:  metadata,
+	}
 }
 
 type DevLogStore struct {
@@ -94,38 +113,27 @@ func (s *DevLogStore) Append(entry DevLogEntry) {
 }
 
 func (s *DevLogStore) FilterEntries(category string, tags []string, limit int) []DevLogEntry {
-	filtered := make([]DevLogEntry, 0)
-	for _, e := range s.Entries {
-		if category != "" && e.Category != category {
+	filtered := make([]DevLogEntry, 0, len(s.Entries))
+	for _, entry := range s.Entries {
+		if category != "" && entry.Category != category {
 			continue
 		}
-		if len(tags) > 0 {
-			rawTags, _ := e.Metadata["tags"].([]any)
-			match := false
-			for _, tag := range tags {
-				for _, rt := range rawTags {
-					if fmt.Sprintf("%v", rt) == tag {
-						match = true
-						break
-					}
-				}
-			}
-			if !match {
-				continue
-			}
+		if len(tags) > 0 && !entryContainsAnyTag(entry, tags) {
+			continue
 		}
-		filtered = append(filtered, e)
+		filtered = append(filtered, entry)
 	}
+
 	if limit > 0 && len(filtered) > limit {
-		return filtered[len(filtered)-limit:]
+		filtered = filtered[len(filtered)-limit:]
 	}
 	return filtered
 }
 
 func (s *DevLogStore) GetStats() map[string]any {
 	byCategory := map[string]int{}
-	for _, e := range s.Entries {
-		byCategory[e.Category]++
+	for _, entry := range s.Entries {
+		byCategory[entry.Category]++
 	}
 	return map[string]any{
 		"total_entries": len(s.Entries),
@@ -137,39 +145,65 @@ func (s *DevLogStore) GenerateSummary(limit int) string {
 	if len(s.Entries) == 0 {
 		return "📝 暂无开发日志"
 	}
-	stats := s.GetStats()
-	byCategory, _ := stats["by_category"].(map[string]int)
-	catParts := make([]string, 0, len(byCategory))
-	for cat, count := range byCategory {
-		catParts = append(catParts, fmt.Sprintf("%s(%d)", cat, count))
+	if limit <= 0 {
+		limit = 10
 	}
+
+	stats := s.GetStats()
+	total, _ := stats["total_entries"].(int)
+	byCategory, _ := stats["by_category"].(map[string]int)
+
+	summaryParts := []string{fmt.Sprintf("📝 共 %d 条日志", total)}
+
+	categoryParts := make([]string, 0)
+	used := map[string]struct{}{}
+	for _, category := range categoryOrder {
+		count, ok := byCategory[category]
+		if !ok {
+			continue
+		}
+		used[category] = struct{}{}
+		categoryParts = append(categoryParts, fmt.Sprintf("%s(%d)", category, count))
+	}
+	extra := make([]string, 0)
+	for category := range byCategory {
+		if _, ok := used[category]; !ok {
+			extra = append(extra, category)
+		}
+	}
+	sort.Strings(extra)
+	for _, category := range extra {
+		categoryParts = append(categoryParts, fmt.Sprintf("%s(%d)", category, byCategory[category]))
+	}
+	summaryParts = append(summaryParts, "分类: "+strings.Join(categoryParts, ", "))
 
 	recent := s.Entries
-	if limit > 0 && len(recent) > limit {
+	if len(recent) > limit {
 		recent = recent[len(recent)-limit:]
 	}
-	recentParts := make([]string, 0)
-	for _, e := range recent {
-		content := e.Content
-		if len(content) > 30 {
-			content = content[:30] + "..."
+	if len(recent) > 0 {
+		start := len(recent) - 3
+		if start < 0 {
+			start = 0
 		}
-		recentParts = append(recentParts, fmt.Sprintf("[%s] %s", e.Category, content))
-		if len(recentParts) >= 3 {
-			break
+		recentParts := make([]string, 0, len(recent)-start)
+		for _, entry := range recent[start:] {
+			content := entry.Content
+			if len(content) > 30 {
+				content = content[:30] + "..."
+			}
+			recentParts = append(recentParts, fmt.Sprintf("[%s] %s", entry.Category, content))
 		}
+		summaryParts = append(summaryParts, "最近: "+strings.Join(recentParts, "; "))
 	}
 
-	return fmt.Sprintf("📝 共 %d 条日志. 分类: %s. 最近: %s",
-		stats["total_entries"].(int),
-		strings.Join(catParts, ", "),
-		strings.Join(recentParts, "; "))
+	return strings.Join(summaryParts, ". ")
 }
 
 func (s *DevLogStore) ToMap() map[string]any {
 	entries := make([]map[string]any, 0, len(s.Entries))
-	for _, e := range s.Entries {
-		entries = append(entries, e.ToMap())
+	for _, entry := range s.Entries {
+		entries = append(entries, entry.ToMap())
 	}
 	return map[string]any{
 		"session_id": s.SessionID,
@@ -191,24 +225,34 @@ func DevLogStoreFromMap(data map[string]any) DevLogStore {
 	agentName, _ := data["agent_name"].(string)
 	createdAt, _ := data["created_at"].(string)
 	updatedAt, _ := data["updated_at"].(string)
-	store := DevLogStore{SessionID: sessionID, AgentName: agentName, CreatedAt: createdAt, UpdatedAt: updatedAt, Entries: []DevLogEntry{}}
+	entries := []DevLogEntry{}
+
 	if rawEntries, ok := data["entries"].([]any); ok {
 		for _, raw := range rawEntries {
-			if m, ok := raw.(map[string]any); ok {
-				store.Entries = append(store.Entries, DevLogEntryFromMap(m))
+			entryData, ok := raw.(map[string]any)
+			if !ok {
+				continue
 			}
+			entries = append(entries, DevLogEntryFromMap(entryData))
 		}
 	}
-	return store
+
+	return DevLogStore{
+		SessionID: sessionID,
+		AgentName: agentName,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		Entries:   entries,
+	}
 }
 
 type DevLogTool struct {
 	tools.BaseTool
-	SessionID      string
-	AgentName      string
-	ProjectRoot    string
-	PersistenceDir string
-	Store          DevLogStore
+	sessionID      string
+	agentName      string
+	projectRoot    string
+	persistenceDir string
+	store          DevLogStore
 }
 
 func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *DevLogTool {
@@ -224,55 +268,77 @@ func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *De
 	if persistenceDir == "" {
 		persistenceDir = "memory/devlogs"
 	}
-	base := tools.NewBaseTool("DevLog", "记录开发过程中的关键决策和问题", false)
+
+	categoryLines := make([]string, 0, len(categoryOrder))
+	for _, category := range categoryOrder {
+		categoryLines = append(categoryLines, fmt.Sprintf("- %s: %s", category, CATEGORIES[category]))
+	}
+
+	base := tools.NewBaseTool(
+		"DevLog",
+		fmt.Sprintf(`记录开发过程中的关键决策和问题。
+
+支持的类别：
+%s
+
+操作：
+- append: 追加日志（需要 category, content, metadata）
+- read: 读取日志（可选 category, tags, limit）
+- summary: 生成摘要
+- clear: 清空日志
+
+示例：
+{
+  "action": "append",
+  "category": "decision",
+  "content": "选择使用 Redis 作为缓存层",
+  "metadata": {"tags": ["architecture", "cache"]}
+}`, strings.Join(categoryLines, "\n")),
+		false,
+	)
 	base.Parameters = map[string]tools.ToolParameter{
 		"action": {
 			Name:        "action",
 			Type:        "string",
-			Description: "append/read/summary/clear",
+			Description: "操作类型：append（追加）、read（读取）、summary（摘要）、clear（清空）",
 			Required:    true,
 		},
 		"category": {
 			Name:        "category",
 			Type:        "string",
-			Description: "日志类别",
+			Description: fmt.Sprintf("日志类别（append 时必填）：%s", strings.Join(categoryOrder, ", ")),
 			Required:    false,
 		},
 		"content": {
 			Name:        "content",
 			Type:        "string",
-			Description: "日志内容",
+			Description: "日志内容（append 时必填）",
 			Required:    false,
 		},
 		"metadata": {
 			Name:        "metadata",
 			Type:        "object",
-			Description: "扩展元数据",
+			Description: `元数据（可选），如 {"tags": ["cache"], "step": 3, "related_tool": "WriteTool"}`,
 			Required:    false,
 		},
-		"tags": {
-			Name:        "tags",
-			Type:        "array",
-			Description: "标签过滤（read）",
+		"filter": {
+			Name:        "filter",
+			Type:        "object",
+			Description: `过滤条件（read 时可选），如 {"category": "decision", "tags": ["architecture"], "limit": 10}`,
 			Required:    false,
-		},
-		"limit": {
-			Name:        "limit",
-			Type:        "integer",
-			Description: "读取条数限制",
-			Required:    false,
-			Default:     20,
 		},
 	}
-	fullDir := filepath.Join(projectRoot, persistenceDir)
-	_ = os.MkdirAll(fullDir, 0o755)
+
+	fullPersistenceDir := filepath.Join(projectRoot, persistenceDir)
+	_ = os.MkdirAll(fullPersistenceDir, 0o755)
+
 	tool := &DevLogTool{
 		BaseTool:       base,
-		SessionID:      sessionID,
-		AgentName:      agentName,
-		ProjectRoot:    projectRoot,
-		PersistenceDir: fullDir,
-		Store:          NewDevLogStore(sessionID, agentName),
+		sessionID:      sessionID,
+		agentName:      agentName,
+		projectRoot:    projectRoot,
+		persistenceDir: fullPersistenceDir,
+		store:          NewDevLogStore(sessionID, agentName),
 	}
 	tool.loadIfExists()
 	return tool
@@ -284,9 +350,7 @@ func (t *DevLogTool) GetParameters() []tools.ToolParameter {
 
 func (t *DevLogTool) Run(parameters map[string]any) tools.ToolResponse {
 	action, _ := parameters["action"].(string)
-	if action == "" {
-		return tools.Error("缺少 action 参数", tools.ToolErrorCodeInvalidParam, nil)
-	}
+
 	switch action {
 	case "append":
 		return t.handleAppend(parameters)
@@ -297,79 +361,208 @@ func (t *DevLogTool) Run(parameters map[string]any) tools.ToolResponse {
 	case "clear":
 		return t.handleClear()
 	default:
-		return tools.Error("不支持的 action", tools.ToolErrorCodeInvalidParam, map[string]any{"action": action})
+		return tools.Error(
+			fmt.Sprintf("未知操作：%v", parameters["action"]),
+			tools.ToolErrorCodeInvalidParam,
+			nil,
+		)
 	}
 }
 
 func (t *DevLogTool) handleAppend(parameters map[string]any) tools.ToolResponse {
 	category, _ := parameters["category"].(string)
 	content, _ := parameters["content"].(string)
-	metadata, _ := parameters["metadata"].(map[string]any)
-	if category == "" || content == "" {
-		return tools.Error("append 需要 category 和 content", tools.ToolErrorCodeInvalidParam, nil)
+
+	if category == "" {
+		return tools.Error("追加日志时必须指定 category", tools.ToolErrorCodeInvalidParam, nil)
 	}
 	if _, ok := CATEGORIES[category]; !ok {
-		return tools.Error("无效 category", tools.ToolErrorCodeInvalidParam, map[string]any{"category": category})
+		return tools.Error(
+			fmt.Sprintf("无效的类别：%s，支持的类别：%s", category, strings.Join(categoryOrder, ", ")),
+			tools.ToolErrorCodeInvalidParam,
+			nil,
+		)
 	}
+	if strings.TrimSpace(content) == "" {
+		return tools.Error("追加日志时必须指定 content", tools.ToolErrorCodeInvalidParam, nil)
+	}
+
+	metadata, _ := parameters["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+
 	entry := NewDevLogEntry(category, content, metadata)
-	t.Store.Append(entry)
+	t.store.Append(entry)
 	t.persist()
-	return tools.Success("日志已记录", map[string]any{"entry": entry.ToMap(), "stats": t.Store.GetStats()}, nil)
+
+	displayContent := content
+	if len(displayContent) > 50 {
+		displayContent = displayContent[:50] + "..."
+	}
+
+	return tools.Success(
+		fmt.Sprintf("✅ 日志已记录 [%s]: %s", category, displayContent),
+		map[string]any{
+			"log_id":    entry.ID,
+			"timestamp": entry.Timestamp,
+			"category":  entry.Category,
+		},
+		t.store.GetStats(),
+	)
 }
 
 func (t *DevLogTool) handleRead(parameters map[string]any) tools.ToolResponse {
-	category, _ := parameters["category"].(string)
-	limit := 20
-	if v, ok := parameters["limit"].(int); ok && v > 0 {
-		limit = v
+	filterParams := map[string]any{}
+	if rawFilter, ok := parameters["filter"].(map[string]any); ok && rawFilter != nil {
+		filterParams = rawFilter
 	}
-	tags := []string{}
-	if rawTags, ok := parameters["tags"].([]any); ok {
-		for _, raw := range rawTags {
-			tags = append(tags, fmt.Sprintf("%v", raw))
+
+	category, _ := filterParams["category"].(string)
+	tags := parseStringList(filterParams["tags"])
+	limit := intFromAny(filterParams["limit"])
+
+	entries := t.store.FilterEntries(category, tags, limit)
+	if len(entries) == 0 {
+		return tools.Success(
+			"📝 未找到匹配的日志",
+			map[string]any{"entries": []map[string]any{}},
+			map[string]any{"matched": 0},
+		)
+	}
+
+	lines := []string{fmt.Sprintf("📝 找到 %d 条日志：\n", len(entries))}
+	serializedEntries := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		lines = append(lines, fmt.Sprintf("[%s] %s", entry.Category, entry.Timestamp))
+		lines = append(lines, "  "+entry.Content)
+		if len(entry.Metadata) > 0 {
+			metadataBytes, _ := json.Marshal(entry.Metadata)
+			lines = append(lines, "  元数据: "+string(metadataBytes))
 		}
+		lines = append(lines, "")
+		serializedEntries = append(serializedEntries, entry.ToMap())
 	}
-	entries := t.Store.FilterEntries(category, tags, limit)
-	lines := make([]string, 0, len(entries))
-	entryMaps := make([]map[string]any, 0, len(entries))
-	for _, e := range entries {
-		lines = append(lines, fmt.Sprintf("[%s] %s - %s", e.Timestamp, e.Category, e.Content))
-		entryMaps = append(entryMaps, e.ToMap())
-	}
-	if len(lines) == 0 {
-		return tools.Success("暂无匹配日志", map[string]any{"entries": entryMaps}, nil)
-	}
-	return tools.Success(strings.Join(lines, "\n"), map[string]any{"entries": entryMaps, "count": len(entries)}, nil)
+
+	return tools.Success(
+		strings.Join(lines, "\n"),
+		map[string]any{"entries": serializedEntries},
+		map[string]any{"matched": len(entries)},
+	)
 }
 
 func (t *DevLogTool) handleSummary() tools.ToolResponse {
-	summary := t.Store.GenerateSummary(10)
-	return tools.Success(summary, map[string]any{"stats": t.Store.GetStats()}, nil)
+	summary := t.store.GenerateSummary(10)
+	return tools.Success(summary, t.store.GetStats())
 }
 
 func (t *DevLogTool) handleClear() tools.ToolResponse {
-	t.Store = NewDevLogStore(t.SessionID, t.AgentName)
+	oldCount := len(t.store.Entries)
+	t.store.Entries = []DevLogEntry{}
+	t.store.UpdatedAt = time.Now().Format(time.RFC3339Nano)
 	t.persist()
-	return tools.Success("开发日志已清空", map[string]any{"stats": t.Store.GetStats()}, nil)
+
+	return tools.Success(
+		fmt.Sprintf("✅ 已清空 %d 条日志", oldCount),
+		map[string]any{"cleared_count": oldCount},
+	)
 }
 
 func (t *DevLogTool) persist() {
-	path := filepath.Join(t.PersistenceDir, fmt.Sprintf("devlog-%s-%s.json", t.SessionID, t.AgentName))
-	payload, _ := json.MarshalIndent(t.Store.ToMap(), "", "  ")
-	tmpPath := path + ".tmp"
-	_ = os.WriteFile(tmpPath, payload, 0o644)
-	_ = os.Rename(tmpPath, path)
-}
+	filename := fmt.Sprintf("devlog-%s.json", t.sessionID)
+	filepath := filepath.Join(t.persistenceDir, filename)
 
-func (t *DevLogTool) loadIfExists() {
-	path := filepath.Join(t.PersistenceDir, fmt.Sprintf("devlog-%s-%s.json", t.SessionID, t.AgentName))
-	data, err := os.ReadFile(path)
+	payload, err := json.MarshalIndent(t.store.ToMap(), "", "  ")
 	if err != nil {
 		return
 	}
-	var raw map[string]any
+
+	tmpPath := strings.TrimSuffix(filepath, ".json") + ".tmp"
+	if err := os.WriteFile(tmpPath, payload, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmpPath, filepath)
+}
+
+func (t *DevLogTool) loadIfExists() {
+	filename := fmt.Sprintf("devlog-%s.json", t.sessionID)
+	filepath := filepath.Join(t.persistenceDir, filename)
+
+	data, err := os.ReadFile(filepath)
+	if err != nil {
+		return
+	}
+
+	raw := map[string]any{}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return
 	}
-	t.Store = DevLogStoreFromMap(raw)
+	t.store = DevLogStoreFromMap(raw)
+}
+
+func entryContainsAnyTag(entry DevLogEntry, tags []string) bool {
+	if len(tags) == 0 {
+		return true
+	}
+	rawTags, ok := entry.Metadata["tags"]
+	if !ok {
+		return false
+	}
+	entryTags := parseStringList(rawTags)
+	if len(entryTags) == 0 {
+		return false
+	}
+
+	for _, wanted := range tags {
+		for _, existing := range entryTags {
+			if wanted == existing {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseStringList(value any) []string {
+	if value == nil {
+		return nil
+	}
+
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		text := strings.TrimSpace(fmt.Sprintf("%v", typed))
+		if text == "" || text == "<nil>" {
+			return nil
+		}
+		return []string{text}
+	}
+}
+
+func randomHex(size int) string {
+	if size <= 0 {
+		size = 4
+	}
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%08x", time.Now().UnixNano())[:size*2]
+	}
+	return hex.EncodeToString(b)
 }
