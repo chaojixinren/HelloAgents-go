@@ -241,6 +241,431 @@ func (a *ReActAgent) Run(inputText string, kwargs map[string]any) (string, error
 	return finalAnswer, nil
 }
 
+func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]any) (string, error) {
+	if kwargs == nil {
+		kwargs = map[string]any{}
+	}
+	startTime := time.Now()
+	a.emitHook(core.AgentStart, hooks.OnStart, map[string]any{"input_text": inputText})
+
+	messages := a.buildMessages(inputText)
+	toolSchemas := a.buildToolSchemas()
+	currentStep := 0
+	totalTokens := 0
+
+	if a.TraceLogger != nil {
+		a.TraceLogger.LogEvent("message_written", map[string]any{
+			"role":    "user",
+			"content": inputText,
+		}, nil)
+	}
+
+	for currentStep < a.MaxSteps {
+		currentStep++
+		a.emitHook(core.StepStart, hooks.OnStep, map[string]any{"step": currentStep})
+
+		response, err := a.LLM.AInvokeWithTools(messages, toolSchemas, "auto", kwargs)
+		if err != nil {
+			a.emitHook(core.AgentError, hooks.OnError, map[string]any{
+				"error": err.Error(),
+				"step":  currentStep,
+			})
+			break
+		}
+
+		usage := usageFromLLMRawResponse(response)
+		totalTokens += intFromAny(usage["total_tokens"])
+
+		content, toolCalls := extractToolCallsAndContent(response)
+		if a.TraceLogger != nil {
+			step := currentStep
+			a.TraceLogger.LogEvent("model_output", map[string]any{
+				"content":    content,
+				"tool_calls": len(toolCalls),
+				"usage":      usage,
+			}, &step)
+		}
+
+		if len(toolCalls) == 0 {
+			finalAnswer := content
+			if finalAnswer == "" {
+				finalAnswer = "抱歉，我无法回答这个问题。"
+			}
+
+			a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+			a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+
+			a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+				"result":       finalAnswer,
+				"total_steps":  currentStep,
+				"total_tokens": totalTokens,
+			})
+
+			if a.TraceLogger != nil {
+				a.TraceLogger.LogEvent("session_end", map[string]any{
+					"duration":     time.Since(startTime).Seconds(),
+					"total_steps":  currentStep,
+					"final_answer": finalAnswer,
+					"status":       "success",
+				}, nil)
+				_ = a.TraceLogger.Finalize()
+			}
+			return finalAnswer, nil
+		}
+
+		messages = append(messages, map[string]any{
+			"role":       "assistant",
+			"content":    content,
+			"tool_calls": toOpenAIToolCallsPayload(toolCalls),
+		})
+
+		toolResults := a.executeToolsAsync(toolCalls, currentStep, hooks.OnToolCall)
+		for _, item := range toolResults {
+			if item.ToolName == "Finish" && toBool(item.Result["finished"]) {
+				finalAnswer := fmt.Sprintf("%v", item.Result["final_answer"])
+				if finalAnswer == "" || finalAnswer == "<nil>" {
+					finalAnswer = fmt.Sprintf("%v", item.Result["content"])
+				}
+				a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+				a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+
+				a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+					"result":       finalAnswer,
+					"total_steps":  currentStep,
+					"total_tokens": totalTokens,
+				})
+
+				if a.TraceLogger != nil {
+					a.TraceLogger.LogEvent("session_end", map[string]any{
+						"duration":     time.Since(startTime).Seconds(),
+						"total_steps":  currentStep,
+						"final_answer": finalAnswer,
+						"status":       "success",
+					}, nil)
+					_ = a.TraceLogger.Finalize()
+				}
+				return finalAnswer, nil
+			}
+
+			messages = append(messages, map[string]any{
+				"role":         "tool",
+				"tool_call_id": item.ToolCallID,
+				"content":      fmt.Sprintf("%v", item.Result["content"]),
+			})
+		}
+
+		a.emitHook(core.StepFinish, hooks.OnStep, map[string]any{
+			"step":       currentStep,
+			"tool_calls": len(toolCalls),
+		})
+	}
+
+	finalAnswer := "抱歉，我无法在限定步数内完成这个任务。"
+	a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+	a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+
+	a.emitHook(core.AgentFinish, hooks.OnFinish, map[string]any{
+		"result":       finalAnswer,
+		"total_steps":  currentStep,
+		"total_tokens": totalTokens,
+		"status":       "timeout",
+	})
+
+	if a.TraceLogger != nil {
+		a.TraceLogger.LogEvent("session_end", map[string]any{
+			"duration":     time.Since(startTime).Seconds(),
+			"total_steps":  currentStep,
+			"final_answer": finalAnswer,
+			"status":       "timeout",
+		}, nil)
+		_ = a.TraceLogger.Finalize()
+	}
+
+	return finalAnswer, nil
+}
+
+func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	out := make(chan core.AgentEvent, 64)
+	go func() {
+		defer close(out)
+
+		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+			"input_text": inputText,
+		})
+
+		messages := a.buildMessages(inputText)
+		toolSchemas := a.buildToolSchemas()
+		currentStep := 0
+		finalAnswer := ""
+
+		for currentStep < a.MaxSteps {
+			currentStep++
+			out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+				"step":      currentStep,
+				"max_steps": a.MaxSteps,
+			})
+
+			fullResponse, err := streamLLMResponse(a.LLM, messages, kwargs, func(chunk string) {
+				out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+					"chunk": chunk,
+					"step":  currentStep,
+				})
+			})
+			if err != nil {
+				out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+					"error": err.Error(),
+					"step":  currentStep,
+				})
+				break
+			}
+
+			response, err := a.LLM.InvokeWithTools(messages, toolSchemas, "auto", kwargs)
+			if err != nil {
+				out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+					"error": err.Error(),
+					"step":  currentStep,
+				})
+				break
+			}
+
+			content, toolCalls := extractToolCallsAndContent(response)
+			if len(toolCalls) == 0 {
+				finalAnswer = content
+				if finalAnswer == "" {
+					finalAnswer = fullResponse
+				}
+				if finalAnswer == "" {
+					finalAnswer = "抱歉，我无法回答这个问题。"
+				}
+				out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+					"result":      finalAnswer,
+					"total_steps": currentStep,
+				})
+				a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+				a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+				return
+			}
+
+			messages = append(messages, map[string]any{
+				"role":       "assistant",
+				"content":    content,
+				"tool_calls": toOpenAIToolCallsPayload(toolCalls),
+			})
+
+			toolResults := a.executeToolsAsyncStream(toolCalls, currentStep, nil)
+			for _, item := range toolResults {
+				out <- core.NewAgentEvent(core.ToolResult, a.Name, map[string]any{
+					"tool_name":    item.ToolName,
+					"tool_call_id": item.ToolCallID,
+					"result":       item.Result["content"],
+					"step":         currentStep,
+				})
+
+				messages = append(messages, map[string]any{
+					"role":         "tool",
+					"tool_call_id": item.ToolCallID,
+					"content":      fmt.Sprintf("%v", item.Result["content"]),
+				})
+
+				if item.ToolName == "Finish" {
+					finalAnswer = fmt.Sprintf("%v", item.Result["final_answer"])
+					if finalAnswer == "" || finalAnswer == "<nil>" {
+						finalAnswer = fmt.Sprintf("%v", item.Result["content"])
+					}
+					out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+						"result":      finalAnswer,
+						"total_steps": currentStep,
+					})
+					a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+					a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+					return
+				}
+			}
+
+			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+				"step": currentStep,
+			})
+		}
+
+		if finalAnswer == "" {
+			finalAnswer = "抱歉，已达到最大步数限制，无法完成任务。"
+		}
+		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+			"result":            finalAnswer,
+			"total_steps":       currentStep,
+			"max_steps_reached": true,
+		})
+		a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+		a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+	}()
+	return out
+}
+
+func (a *ReActAgent) executeToolsAsync(
+	toolCalls []toolCallEnvelope,
+	currentStep int,
+	onToolCall core.LifecycleHook,
+) []reactToolExecutionResult {
+	results := make([]reactToolExecutionResult, 0, len(toolCalls))
+	builtinCalls := make([]toolCallEnvelope, 0)
+	userCalls := make([]toolCallEnvelope, 0)
+
+	for _, tc := range toolCalls {
+		if _, ok := a.builtinTools[tc.Name]; ok {
+			builtinCalls = append(builtinCalls, tc)
+		} else {
+			userCalls = append(userCalls, tc)
+		}
+	}
+
+	for _, tc := range builtinCalls {
+		args := tc.Arguments
+		if args == nil {
+			args = map[string]any{}
+		}
+		if tc.ParseError != "" {
+			results = append(results, reactToolExecutionResult{
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+				Result: map[string]any{
+					"content": "错误：参数格式不正确 - " + tc.ParseError,
+				},
+			})
+			continue
+		}
+
+		a.emitHook(core.ToolCall, onToolCall, map[string]any{
+			"tool_name":    tc.Name,
+			"tool_call_id": tc.ID,
+			"args":         args,
+			"step":         currentStep,
+		})
+
+		builtin := a.handleBuiltinTool(tc.Name, args)
+		if a.TraceLogger != nil {
+			step := currentStep
+			a.TraceLogger.LogEvent("tool_result", map[string]any{
+				"tool_name":    tc.Name,
+				"tool_call_id": tc.ID,
+				"status":       "success",
+				"result":       builtin.Content,
+			}, &step)
+		}
+
+		results = append(results, reactToolExecutionResult{
+			ToolName:   tc.Name,
+			ToolCallID: tc.ID,
+			Result: map[string]any{
+				"content":      builtin.Content,
+				"finished":     builtin.Finished,
+				"final_answer": builtin.FinalAnswer,
+			},
+		})
+	}
+
+	if len(userCalls) > 0 {
+		maxConcurrent := a.Config.MaxConcurrentTools
+		if maxConcurrent <= 0 {
+			maxConcurrent = 3
+		}
+		sem := make(chan struct{}, maxConcurrent)
+		ordered := make([]reactToolExecutionResult, len(userCalls))
+		var wg sync.WaitGroup
+
+		for i, tc := range userCalls {
+			wg.Add(1)
+			go func(idx int, call toolCallEnvelope) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				args := call.Arguments
+				if args == nil {
+					args = map[string]any{}
+				}
+				if call.ParseError != "" {
+					ordered[idx] = reactToolExecutionResult{
+						ToolName:   call.Name,
+						ToolCallID: call.ID,
+						Result: map[string]any{
+							"content": "错误：参数格式不正确 - " + call.ParseError,
+						},
+					}
+					return
+				}
+
+				a.emitHook(core.ToolCall, onToolCall, map[string]any{
+					"tool_name":    call.Name,
+					"tool_call_id": call.ID,
+					"args":         args,
+					"step":         currentStep,
+				})
+
+				resultContent := fmt.Sprintf("❌ 工具 %s 不存在", call.Name)
+				if tool := a.ToolRegistry.GetTool(call.Name); tool != nil {
+					toolResponse := tool.ARunWithTiming(args)
+					resultContent = toolResponse.Text
+					if a.Truncator != nil {
+						preview, _ := a.Truncator.Truncate(resultContent, call.Name)
+						resultContent = preview
+					}
+				}
+
+				if a.TraceLogger != nil {
+					step := currentStep
+					a.TraceLogger.LogEvent("tool_result", map[string]any{
+						"tool_name":    call.Name,
+						"tool_call_id": call.ID,
+						"result":       resultContent,
+					}, &step)
+				}
+
+				ordered[idx] = reactToolExecutionResult{
+					ToolName:   call.Name,
+					ToolCallID: call.ID,
+					Result: map[string]any{
+						"content": resultContent,
+					},
+				}
+			}(i, tc)
+		}
+		wg.Wait()
+		results = append(results, ordered...)
+	}
+
+	return results
+}
+
+func (a *ReActAgent) executeToolsAsyncStream(
+	toolCalls []toolCallEnvelope,
+	currentStep int,
+	onToolCall core.LifecycleHook,
+) []reactToolExecutionResult {
+	return a.executeToolsAsync(toolCalls, currentStep, onToolCall)
+}
+
+func (a *ReActAgent) emitHook(eventType core.EventType, hook core.LifecycleHook, data map[string]any) {
+	if hook == nil {
+		return
+	}
+	_ = hook(core.NewAgentEvent(eventType, a.Name, data))
+}
+
+func toBool(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		return value == "true" || value == "1" || value == "yes"
+	case int:
+		return value != 0
+	case float64:
+		return value != 0
+	default:
+		return false
+	}
+}
+
 func (a *ReActAgent) buildMessages(inputText string) []map[string]any {
 	messages := make([]map[string]any, 0, len(a.GetHistory())+2)
 	if a.SystemPrompt != "" {
