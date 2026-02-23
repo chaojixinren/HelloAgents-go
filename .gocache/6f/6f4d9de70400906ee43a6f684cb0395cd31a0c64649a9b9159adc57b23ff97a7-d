@@ -1,6 +1,0 @@
-./agents.go
-./factory.go
-./plan_solve_agent.go
-./react_agent.go
-./reflection_agent.go
-./simple_agent.go

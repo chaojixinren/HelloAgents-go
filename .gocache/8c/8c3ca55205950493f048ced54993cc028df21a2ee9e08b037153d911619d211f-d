@@ -1,9 +1,0 @@
-./builtin.go
-./calculator.go
-./devlog_tool.go
-./file_tools.go
-./memory_tool.go
-./search_tool.go
-./skill_tool.go
-./task_tool.go
-./todowrite_tool.go
