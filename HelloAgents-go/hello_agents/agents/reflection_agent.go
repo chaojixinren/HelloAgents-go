@@ -242,6 +242,153 @@ func (a *ReflectionAgent) GetToolRegistry() *tools.ToolRegistry {
 	return a.ToolRegistry
 }
 
+func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	out := make(chan core.AgentEvent, 32)
+	go func() {
+		defer close(out)
+
+		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+			"input_text": inputText,
+		})
+
+		emitError := func(err error) {
+			out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+				"error":      err.Error(),
+				"error_type": "AgentError",
+			})
+		}
+
+		out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+			"phase":       "initial_execution",
+			"description": "生成初始回答",
+		})
+
+		initialMessages := []map[string]any{}
+		if strings.TrimSpace(a.SystemPrompt) != "" {
+			initialMessages = append(initialMessages, map[string]any{"role": "system", "content": a.SystemPrompt})
+		}
+		for _, msg := range a.GetHistory() {
+			initialMessages = append(initialMessages, map[string]any{"role": msg.Role, "content": msg.Content})
+		}
+		initialMessages = append(initialMessages, map[string]any{"role": "user", "content": inputText})
+
+		initialResponse, err := streamLLMResponse(a.LLM, initialMessages, kwargs, func(chunk string) {
+			out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+				"chunk": chunk,
+				"phase": "execution",
+			})
+		})
+		if err != nil {
+			emitError(err)
+			return
+		}
+
+		out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+			"phase":  "initial_execution",
+			"result": initialResponse,
+		})
+
+		currentResponse := initialResponse
+		for i := 0; i < a.MaxIterations; i++ {
+			iteration := i + 1
+			out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+				"phase":       "reflection",
+				"iteration":   iteration,
+				"description": fmt.Sprintf("第 %d 次反思", iteration),
+			})
+
+			reflectionPrompt := a.buildReflectionPrompt(inputText, currentResponse)
+			reflectionMessages := []map[string]any{
+				{"role": "user", "content": reflectionPrompt},
+			}
+			reflection, err := streamLLMResponse(a.LLM, reflectionMessages, kwargs, func(chunk string) {
+				out <- core.NewAgentEvent(core.Thinking, a.Name, map[string]any{
+					"chunk":     chunk,
+					"phase":     "reflection",
+					"iteration": iteration,
+				})
+			})
+			if err != nil {
+				emitError(err)
+				return
+			}
+
+			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+				"phase":      "reflection",
+				"iteration":  iteration,
+				"reflection": reflection,
+			})
+
+			out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+				"phase":       "refinement",
+				"iteration":   iteration,
+				"description": fmt.Sprintf("第 %d 次优化", iteration),
+			})
+
+			refinementPrompt := a.buildRefinementPrompt(inputText, currentResponse, reflection)
+			refinementMessages := []map[string]any{
+				{"role": "user", "content": refinementPrompt},
+			}
+			refinedResponse, err := streamLLMResponse(a.LLM, refinementMessages, kwargs, func(chunk string) {
+				out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+					"chunk":     chunk,
+					"phase":     "refinement",
+					"iteration": iteration,
+				})
+			})
+			if err != nil {
+				emitError(err)
+				return
+			}
+
+			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+				"phase":     "refinement",
+				"iteration": iteration,
+				"result":    refinedResponse,
+			})
+
+			currentResponse = refinedResponse
+		}
+
+		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+			"result":           currentResponse,
+			"total_iterations": a.MaxIterations,
+		})
+
+		a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+		a.AddMessage(core.NewMessage(currentResponse, core.MessageRoleAssistant, nil))
+	}()
+	return out
+}
+
+func (a *ReflectionAgent) buildReflectionPrompt(task string, result string) string {
+	return fmt.Sprintf(`请仔细审查以下回答，并找出可能的问题或改进空间：
+
+# 原始任务:
+%s
+
+# 当前回答:
+%s
+
+请分析这个回答的质量，指出不足之处，并提出具体的改进建议。
+如果回答已经很好，请回答"无需改进"。`, task, result)
+}
+
+func (a *ReflectionAgent) buildRefinementPrompt(task string, lastAttempt string, feedback string) string {
+	return fmt.Sprintf(`请根据反馈意见改进你的回答：
+
+# 原始任务:
+%s
+
+# 上一轮回答:
+%s
+
+# 反馈意见:
+%s
+
+请提供一个改进后的回答。`, task, lastAttempt, feedback)
+}
+
 func (a *ReflectionAgent) String() string {
 	return fmt.Sprintf("ReflectionAgent(name=%s)", a.Name)
 }

@@ -281,6 +281,163 @@ func (a *PlanSolveAgent) Run(inputText string, kwargs map[string]any) (string, e
 	return finalAnswer, nil
 }
 
+func (a *PlanSolveAgent) ArunStream(inputText string, kwargs map[string]any) <-chan core.AgentEvent {
+	out := make(chan core.AgentEvent, 64)
+	go func() {
+		defer close(out)
+
+		out <- core.NewAgentEvent(core.AgentStart, a.Name, map[string]any{
+			"input_text": inputText,
+		})
+
+		emitError := func(err error, extra map[string]any) {
+			payload := map[string]any{
+				"error":      err.Error(),
+				"error_type": "AgentError",
+			}
+			for k, v := range extra {
+				payload[k] = v
+			}
+			out <- core.NewAgentEvent(core.AgentError, a.Name, payload)
+		}
+
+		out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+			"phase":       "planning",
+			"description": "生成执行计划",
+		})
+
+		plan, err := a.Planner.Plan(inputText, kwargs)
+		if err != nil {
+			emitError(err, map[string]any{"phase": "planning"})
+			return
+		}
+		if len(plan) == 0 {
+			errorMsg := "无法生成有效的行动计划，任务终止。"
+			out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
+				"error": errorMsg,
+				"phase": "planning",
+			})
+			out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+				"result": errorMsg,
+			})
+			a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+			a.AddMessage(core.NewMessage(errorMsg, core.MessageRoleAssistant, nil))
+			return
+		}
+
+		out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+			"phase":       "planning",
+			"plan":        plan,
+			"total_steps": len(plan),
+		})
+
+		stepResults := make([]string, 0, len(plan))
+		for i, stepDescription := range plan {
+			stepNum := i + 1
+			out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+				"phase":       "execution",
+				"step":        stepNum,
+				"total_steps": len(plan),
+				"description": stepDescription,
+			})
+
+			contextLines := make([]string, 0, len(stepResults))
+			for j := range stepResults {
+				contextLines = append(contextLines, fmt.Sprintf("步骤 %d: %s -> %s", j+1, plan[j], stepResults[j]))
+			}
+			context := "无"
+			if len(contextLines) > 0 {
+				context = strings.Join(contextLines, "\n")
+			}
+
+			planLines := make([]string, 0, len(plan))
+			for j, step := range plan {
+				planLines = append(planLines, fmt.Sprintf("%d. %s", j+1, step))
+			}
+
+			prompt := fmt.Sprintf(`原始问题: %s
+
+完整计划:
+%s
+
+已完成的步骤:
+%s
+
+当前步骤: %s
+
+请执行当前步骤并给出结果。`,
+				inputText,
+				strings.Join(planLines, "\n"),
+				context,
+				stepDescription,
+			)
+			messages := []map[string]any{
+				{"role": "user", "content": prompt},
+			}
+
+			stepResult, err := streamLLMResponse(a.LLM, messages, kwargs, func(chunk string) {
+				out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+					"chunk": chunk,
+					"phase": "execution",
+					"step":  stepNum,
+				})
+			})
+			if err != nil {
+				emitError(err, map[string]any{"phase": "execution", "step": stepNum})
+				return
+			}
+
+			stepResults = append(stepResults, stepResult)
+			out <- core.NewAgentEvent(core.StepFinish, a.Name, map[string]any{
+				"phase":  "execution",
+				"step":   stepNum,
+				"result": stepResult,
+			})
+		}
+
+		out <- core.NewAgentEvent(core.StepStart, a.Name, map[string]any{
+			"phase":       "final_answer",
+			"description": "生成最终答案",
+		})
+
+		finalLines := make([]string, 0, len(stepResults))
+		for i := range stepResults {
+			finalLines = append(finalLines, fmt.Sprintf("%d. %s -> %s", i+1, plan[i], stepResults[i]))
+		}
+		finalPrompt := fmt.Sprintf(`原始问题: %s
+
+执行计划和结果:
+%s
+
+请基于以上步骤的执行结果，给出原始问题的最终答案。`,
+			inputText,
+			strings.Join(finalLines, "\n"),
+		)
+		finalMessages := []map[string]any{
+			{"role": "user", "content": finalPrompt},
+		}
+		finalAnswer, err := streamLLMResponse(a.LLM, finalMessages, kwargs, func(chunk string) {
+			out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+				"chunk": chunk,
+				"phase": "final_answer",
+			})
+		})
+		if err != nil {
+			emitError(err, map[string]any{"phase": "final_answer"})
+			return
+		}
+
+		out <- core.NewAgentEvent(core.AgentFinish, a.Name, map[string]any{
+			"result":      finalAnswer,
+			"total_steps": len(plan),
+		})
+
+		a.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
+		a.AddMessage(core.NewMessage(finalAnswer, core.MessageRoleAssistant, nil))
+	}()
+	return out
+}
+
 func (a *PlanSolveAgent) GetToolRegistry() *tools.ToolRegistry {
 	return a.ToolRegistry
 }

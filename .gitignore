@@ -2,6 +2,7 @@
 HelloAgents-py/
 
 # Go
+.gocache/
 *.exe
 *.exe~
 *.dll
