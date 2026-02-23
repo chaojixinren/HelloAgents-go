@@ -2,6 +2,7 @@ package agents
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"helloagents-go/hello_agents/core"
@@ -35,6 +36,12 @@ type builtinToolResult struct {
 	Content     string
 	Finished    bool
 	FinalAnswer string
+}
+
+type reactToolExecutionResult struct {
+	ToolName   string
+	ToolCallID string
+	Result     map[string]any
 }
 
 // ReActAgent mirrors hello_agents.agents.react_agent.ReActAgent.
