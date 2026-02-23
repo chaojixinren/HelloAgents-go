@@ -10,19 +10,6 @@
 
 HelloAgents-Go 是 [HelloAgents](https://github.com/jjyaoao/HelloAgents) Python 版本的 Go 语言实现，基于 OpenAI 原生 API 构建的多智能体框架。
 
-## 📋 开发进度
-
-| 模块 | 状态 | 模块 | 状态 |
-|------|------|------|------|
-| Core (核心) | ✅ | Tools (工具系统) | ✅ |
-| SimpleAgent | ✅ | Memory (记忆系统) | 🚧 |
-| ReActAgent | ✅ | Context (上下文) | 🚧 |
-| ReflectionAgent | ✅ | Evaluation (评估) | 📅 |
-| PlanAndSolveAgent | ✅ | Protocols (协议) | 📅 |
-| FunctionCallAgent | 🚧 | RL (强化学习) | 📅 |
-
-✅ 已完成 | 🔨 部分完成 | 🚧 开发中 | 📅 计划中
-
 ## 🚀 快速开始
 
 ### 安装

@@ -1,0 +1,11 @@
+./agents.go
+./auto_register.go
+./factory.go
+./function_call_agent.go
+./function_call_helpers.go
+./plan_solve_agent.go
+./react_agent.go
+./reflection_agent.go
+./simple_agent.go
+./subagent.go
+./tool_aware_agent.go
