@@ -89,12 +89,6 @@ func NewReflectionAgentWithOptions(
 	if err != nil {
 		return nil, err
 	}
-	if maxIterations <= 0 {
-		maxIterations = 3
-	}
-	if maxToolIterations <= 0 {
-		maxToolIterations = 3
-	}
 
 	agent := &ReflectionAgent{
 		BaseAgent:         base,
@@ -296,7 +290,7 @@ func (a *ReflectionAgent) ArunStream(inputText string, kwargs map[string]any, ho
 		})
 
 		initialMessages := []map[string]any{}
-		if strings.TrimSpace(a.SystemPrompt) != "" {
+		if a.SystemPrompt != "" {
 			initialMessages = append(initialMessages, map[string]any{"role": "system", "content": a.SystemPrompt})
 		}
 		for _, msg := range a.GetHistory() {

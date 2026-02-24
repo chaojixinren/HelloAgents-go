@@ -1,6 +1,10 @@
 package tools
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 type ToolStatus string
 
@@ -44,8 +48,15 @@ func (r ToolResponse) ToDict() map[string]any {
 }
 
 func (r ToolResponse) ToJSON() string {
-	payload, _ := json.Marshal(r.ToMap())
-	return string(payload)
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(r.ToMap()); err != nil {
+		payload, _ := json.Marshal(r.ToMap())
+		return string(payload)
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func ToolResponseFromMap(data map[string]any) ToolResponse {
@@ -68,12 +79,10 @@ func ToolResponseFromMap(data map[string]any) ToolResponse {
 			out[k] = toString(v)
 		}
 		resp.ErrorInfo = out
-	}
-	// Backward compatible key.
-	if errInfo, ok := data["error_info"].(map[string]any); ok && len(resp.ErrorInfo) == 0 {
+	} else if errInfo, ok := data["error"].(map[string]string); ok {
 		out := map[string]string{}
 		for k, v := range errInfo {
-			out[k] = toString(v)
+			out[k] = v
 		}
 		resp.ErrorInfo = out
 	}
@@ -92,11 +101,11 @@ func ToolResponseFromDict(data map[string]any) ToolResponse {
 }
 
 func ToolResponseFromJSON(jsonStr string) ToolResponse {
-	var out ToolResponse
-	if err := json.Unmarshal([]byte(jsonStr), &out); err != nil {
-		return Error("parse tool response json failed", ToolErrorCodeInternalError, map[string]any{"error": err.Error()})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+		panic(err)
 	}
-	return out
+	return ToolResponseFromMap(payload)
 }
 
 func Success(text string, data map[string]any, extras ...map[string]any) ToolResponse {

@@ -1,7 +1,5 @@
 package context
 
-import "time"
-
 // HistoryManager manages append-only message history with round-aware compression.
 type HistoryManager[T any] struct {
 	history              []T
@@ -17,12 +15,6 @@ func NewHistoryManager[T any](
 	summaryFactory func(summary string) T,
 	roleExtractor func(item T) string,
 ) *HistoryManager[T] {
-	if minRetainRounds <= 0 {
-		minRetainRounds = 10
-	}
-	if compressionThreshold <= 0 || compressionThreshold >= 1 {
-		compressionThreshold = 0.8
-	}
 	return &HistoryManager[T]{
 		history:              make([]T, 0, 128),
 		MinRetainRounds:      minRetainRounds,
@@ -136,7 +128,7 @@ func (h *HistoryManager[T]) ToMap(serializer func(T) map[string]any) map[string]
 
 	return map[string]any{
 		"history":    items,
-		"created_at": time.Now().Format(time.RFC3339Nano),
+		"created_at": nowPythonISOTime(),
 		"rounds":     h.EstimateRounds(),
 	}
 }

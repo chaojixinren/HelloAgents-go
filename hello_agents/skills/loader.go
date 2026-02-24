@@ -1,11 +1,13 @@
 package skills
 
 import (
-	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Skill struct {
@@ -16,15 +18,15 @@ type Skill struct {
 	Dir         string
 }
 
-func (s Skill) Scripts() ([]string, error) {
+func (s Skill) Scripts() []string {
 	return collectFiles(filepath.Join(s.Dir, "scripts"))
 }
 
-func (s Skill) Examples() ([]string, error) {
+func (s Skill) Examples() []string {
 	return collectFiles(filepath.Join(s.Dir, "examples"))
 }
 
-func (s Skill) References() ([]string, error) {
+func (s Skill) References() []string {
 	return collectFiles(filepath.Join(s.Dir, "references"))
 }
 
@@ -37,7 +39,7 @@ type SkillLoader struct {
 
 func NewSkillLoader(skillsDir string) (*SkillLoader, error) {
 	if skillsDir == "" {
-		skillsDir = "skills"
+		skillsDir = "."
 	}
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return nil, err
@@ -66,13 +68,13 @@ func (l *SkillLoader) scanSkills() {
 		if _, err := os.Stat(skillMD); err != nil {
 			continue
 		}
-		meta := parseFrontmatterOnly(skillMD)
+		meta := l.parseFrontmatterOnly(skillMD)
 		if len(meta) == 0 {
 			continue
 		}
-		name := meta["name"]
-		if name == "" {
-			name = entry.Name()
+		name := entry.Name()
+		if rawName, exists := meta["name"]; exists {
+			name = rawName
 		}
 		if _, exists := l.MetadataCache[name]; !exists {
 			l.metadataOrder = append(l.metadataOrder, name)
@@ -86,7 +88,7 @@ func (l *SkillLoader) scanSkills() {
 	}
 }
 
-func parseFrontmatterOnly(path string) map[string]string {
+func (l *SkillLoader) parseFrontmatterOnly(path string) map[string]string {
 	contentBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -97,31 +99,21 @@ func parseFrontmatterOnly(path string) map[string]string {
 	if len(match) < 2 {
 		return nil
 	}
-	return parseSimpleYAML(match[1])
-}
-
-func parseSimpleYAML(yaml string) map[string]string {
-	meta := map[string]string{}
-	scanner := bufio.NewScanner(strings.NewReader(yaml))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		idx := strings.Index(line, ":")
-		if idx <= 0 {
-			continue
-		}
-		k := strings.TrimSpace(line[:idx])
-		v := strings.TrimSpace(line[idx+1:])
-		v = strings.Trim(v, "\"")
-		v = strings.Trim(v, "'")
-		meta[k] = v
-	}
-	if meta["name"] == "" || meta["description"] == "" {
+	metadata := parseYAMLFrontmatter(match[1])
+	if len(metadata) == 0 {
 		return nil
 	}
-	return meta
+	// Python behavior: frontmatter-only scan requires both keys to exist.
+	if _, ok := metadata["name"]; !ok {
+		return nil
+	}
+	if _, ok := metadata["description"]; !ok {
+		return nil
+	}
+	return map[string]string{
+		"name":        anyToString(metadata["name"]),
+		"description": anyToString(metadata["description"]),
+	}
 }
 
 func (l *SkillLoader) GetDescriptions() string {
@@ -157,13 +149,21 @@ func (l *SkillLoader) GetSkill(name string) (*Skill, error) {
 	if len(match) < 3 {
 		return nil, nil
 	}
-	parsedMeta := parseSimpleYAML(match[1])
+	parsedMeta := parseYAMLFrontmatter(match[1])
 	if len(parsedMeta) == 0 {
 		return nil, nil
 	}
+	skillName := name
+	if parsedName, exists := parsedMeta["name"]; exists {
+		skillName = anyToString(parsedName)
+	}
+	description := ""
+	if parsedDescription, exists := parsedMeta["description"]; exists {
+		description = anyToString(parsedDescription)
+	}
 	skill := Skill{
-		Name:        parsedMeta["name"],
-		Description: parsedMeta["description"],
+		Name:        skillName,
+		Description: description,
 		Body:        strings.TrimSpace(match[2]),
 		Path:        meta["path"],
 		Dir:         meta["dir"],
@@ -189,9 +189,9 @@ func (l *SkillLoader) Reload() {
 	l.scanSkills()
 }
 
-func collectFiles(dir string) ([]string, error) {
+func collectFiles(dir string) []string {
 	if _, err := os.Stat(dir); err != nil {
-		return []string{}, nil
+		return []string{}
 	}
 	out := make([]string, 0)
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -205,7 +205,22 @@ func collectFiles(dir string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return []string{}
 	}
-	return out, nil
+	return out
+}
+
+func parseYAMLFrontmatter(frontmatter string) map[string]any {
+	var metadata map[string]any
+	if err := yaml.Unmarshal([]byte(frontmatter), &metadata); err != nil {
+		return nil
+	}
+	return metadata
+}
+
+func anyToString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", value)
 }

@@ -62,15 +62,7 @@ func (p *Planner) Plan(question string, kwargs map[string]any) ([]string, error)
 	}
 
 	args := toolCalls[0].Arguments
-	rawSteps, _ := args["steps"].([]any)
-	steps := make([]string, 0, len(rawSteps))
-	for _, raw := range rawSteps {
-		step := strings.TrimSpace(fmt.Sprintf("%v", raw))
-		if step != "" {
-			steps = append(steps, step)
-		}
-	}
-	return steps, nil
+	return plannerStepsFromArgs(args), nil
 }
 
 type Executor struct {
@@ -86,9 +78,6 @@ func NewExecutor(llm *core.HelloAgentsLLM, systemPrompt string, toolRegistry *to
 		systemPrompt = `你是一位顶级的AI执行专家。你的任务是严格按照给定的计划，一步步地解决问题。
 请专注于解决当前步骤，并输出该步骤的最终答案。`
 	}
-	if maxToolIterations <= 0 {
-		maxToolIterations = 3
-	}
 	return &Executor{
 		LLMClient:         llm,
 		SystemPrompt:      systemPrompt,
@@ -96,6 +85,15 @@ func NewExecutor(llm *core.HelloAgentsLLM, systemPrompt string, toolRegistry *to
 		EnableToolCalling: enableToolCalling && toolRegistry != nil,
 		MaxToolIterations: maxToolIterations,
 	}
+}
+
+func plannerStepsFromArgs(args map[string]any) []string {
+	rawSteps, _ := args["steps"].([]any)
+	steps := make([]string, 0, len(rawSteps))
+	for _, raw := range rawSteps {
+		steps = append(steps, fmt.Sprintf("%v", raw))
+	}
+	return steps
 }
 
 func (e *Executor) Execute(question string, plan []string, kwargs map[string]any) (string, error) {
@@ -263,9 +261,6 @@ func NewPlanSolveAgentWithOptions(
 	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
 	if err != nil {
 		return nil, err
-	}
-	if maxToolIterations <= 0 {
-		maxToolIterations = 3
 	}
 
 	agent := &PlanSolveAgent{

@@ -1,10 +1,13 @@
 package builtin
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +31,7 @@ func NewReadToolWithOptions(projectRoot string, workingDir string, registry *too
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
 	absWorkingDir := absRoot
-	if strings.TrimSpace(workingDir) != "" {
+	if workingDir != "" {
 		absWorkingDir, _ = filepath.Abs(workingDir)
 	}
 	base := tools.NewBaseTool("Read", "读取文件内容或列出目录内容，支持行号范围和元数据缓存", false)
@@ -72,12 +75,13 @@ func (t *ReadTool) Run(parameters map[string]any) tools.ToolResponse {
 	if offset < 0 {
 		offset = 0
 	}
-	limit := intFromAny(parameters["limit"])
-	if limit == 0 {
+	rawLimit, hasLimit := parameters["limit"]
+	limit := intFromAny(rawLimit)
+	if !hasLimit {
 		limit = 2000
 	}
 
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return tools.Error("缺少必需参数: path", tools.ToolErrorCodeInvalidParam, nil)
 	}
 
@@ -105,7 +109,10 @@ func (t *ReadTool) Run(parameters map[string]any) tools.ToolResponse {
 		return tools.Error(fmt.Sprintf("读取文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
-	allLines := strings.Split(string(contentBytes), "\n")
+	allLines := strings.SplitAfter(string(contentBytes), "\n")
+	if len(allLines) > 0 && allLines[len(allLines)-1] == "" {
+		allLines = allLines[:len(allLines)-1]
+	}
 	totalLines := len(allLines)
 	if offset > len(allLines) {
 		offset = len(allLines)
@@ -114,10 +121,7 @@ func (t *ReadTool) Run(parameters map[string]any) tools.ToolResponse {
 	if limit > 0 && len(lines) > limit {
 		lines = lines[:limit]
 	}
-	content := strings.Join(lines, "\n")
-	if len(lines) > 0 && strings.HasSuffix(string(contentBytes), "\n") && offset+len(lines) == totalLines {
-		content += "\n"
-	}
+	content := strings.Join(lines, "")
 
 	fileMtimeMS := st.ModTime().UnixMilli()
 	fileSizeBytes := st.Size()
@@ -256,7 +260,7 @@ func NewWriteToolWithOptions(projectRoot string, workingDir string, registry *to
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
 	absWorkingDir := absRoot
-	if strings.TrimSpace(workingDir) != "" {
+	if workingDir != "" {
 		absWorkingDir, _ = filepath.Abs(workingDir)
 	}
 	base := tools.NewBaseTool("Write", "创建或覆盖文件，支持冲突检测和原子写入", false)
@@ -280,9 +284,10 @@ func (t *WriteTool) GetParameters() []tools.ToolParameter {
 func (t *WriteTool) Run(parameters map[string]any) tools.ToolResponse {
 	path, _ := parameters["path"].(string)
 	content, contentExists := parameters["content"]
-	cachedMtime := int64(intFromAny(parameters["file_mtime_ms"]))
+	rawCachedMtime, hasCachedMtime := parameters["file_mtime_ms"]
+	cachedMtime := int64(intFromAny(rawCachedMtime))
 
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return tools.Error("缺少必需参数: path", tools.ToolErrorCodeInvalidParam, nil)
 	}
 	if !contentExists {
@@ -295,7 +300,7 @@ func (t *WriteTool) Run(parameters map[string]any) tools.ToolResponse {
 
 	if st, err := os.Stat(fullPath); err == nil {
 		currentMtime := st.ModTime().UnixMilli()
-		if cachedMtime != 0 && currentMtime != cachedMtime {
+		if hasCachedMtime && currentMtime != cachedMtime {
 			return tools.Error(
 				fmt.Sprintf("文件自上次读取后被修改。当前 mtime=%d, 缓存 mtime=%d", currentMtime, cachedMtime),
 				tools.ToolErrorCodeConflict,
@@ -304,18 +309,38 @@ func (t *WriteTool) Run(parameters map[string]any) tools.ToolResponse {
 		}
 		if b, err := t.backupFile(fullPath); err == nil {
 			backupPath = b
+		} else {
+			if isPermissionError(err) {
+				return tools.Error(fmt.Sprintf("无权限写入 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+			}
+			return tools.Error(fmt.Sprintf("写入文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 		}
 	} else {
+		if !os.IsNotExist(err) {
+			if isPermissionError(err) {
+				return tools.Error(fmt.Sprintf("无权限写入 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+			}
+			return tools.Error(fmt.Sprintf("写入文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
+		}
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			if isPermissionError(err) {
+				return tools.Error(fmt.Sprintf("无权限写入 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+			}
 			return tools.Error(fmt.Sprintf("写入文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 		}
 	}
 
 	tmpPath := fullPath + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(contentText), 0o644); err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限写入 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("写入文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 	if err := os.Rename(tmpPath, fullPath); err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限写入 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("写入文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
@@ -346,10 +371,11 @@ func (t *WriteTool) backupFile(fullPath string) (string, error) {
 }
 
 func (t *WriteTool) resolvePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	if filepath.IsAbs(normalized) {
+		return normalized
 	}
-	return filepath.Join(t.WorkingDir, path)
+	return filepath.Join(t.WorkingDir, normalized)
 }
 
 type EditTool struct {
@@ -369,7 +395,7 @@ func NewEditToolWithOptions(projectRoot string, workingDir string, registry *too
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
 	absWorkingDir := absRoot
-	if strings.TrimSpace(workingDir) != "" {
+	if workingDir != "" {
 		absWorkingDir, _ = filepath.Abs(workingDir)
 	}
 	base := tools.NewBaseTool("Edit", "精确替换文件内容，支持冲突检测和自动备份", false)
@@ -395,9 +421,10 @@ func (t *EditTool) Run(parameters map[string]any) tools.ToolResponse {
 	path, _ := parameters["path"].(string)
 	oldString, oldOk := parameters["old_string"]
 	newString, newOk := parameters["new_string"]
-	cachedMtime := int64(intFromAny(parameters["file_mtime_ms"]))
+	rawCachedMtime, hasCachedMtime := parameters["file_mtime_ms"]
+	cachedMtime := int64(intFromAny(rawCachedMtime))
 
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return tools.Error("缺少必需参数: path", tools.ToolErrorCodeInvalidParam, nil)
 	}
 	if !oldOk {
@@ -416,11 +443,14 @@ func (t *EditTool) Run(parameters map[string]any) tools.ToolResponse {
 		if os.IsNotExist(err) {
 			return tools.Error(fmt.Sprintf("文件 '%s' 不存在", path), tools.ToolErrorCodeNotFound, nil)
 		}
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("编辑文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
 	currentMtime := st.ModTime().UnixMilli()
-	if cachedMtime != 0 && currentMtime != cachedMtime {
+	if hasCachedMtime && currentMtime != cachedMtime {
 		return tools.Error(
 			fmt.Sprintf("文件自上次读取后被修改。当前 mtime=%d, 缓存 mtime=%d", currentMtime, cachedMtime),
 			tools.ToolErrorCodeConflict,
@@ -430,6 +460,9 @@ func (t *EditTool) Run(parameters map[string]any) tools.ToolResponse {
 
 	contentBytes, err := os.ReadFile(fullPath)
 	if err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("编辑文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 	content := string(contentBytes)
@@ -443,8 +476,17 @@ func (t *EditTool) Run(parameters map[string]any) tools.ToolResponse {
 	}
 
 	newContent := strings.Replace(content, oldText, newText, 1)
-	backupPath, _ := t.backupFile(fullPath)
+	backupPath, err := t.backupFile(fullPath)
+	if err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
+		return tools.Error(fmt.Sprintf("编辑文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
+	}
 	if err := os.WriteFile(fullPath, []byte(newContent), 0o644); err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("编辑文件失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
@@ -478,10 +520,11 @@ func (t *EditTool) backupFile(fullPath string) (string, error) {
 }
 
 func (t *EditTool) resolvePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	if filepath.IsAbs(normalized) {
+		return normalized
 	}
-	return filepath.Join(t.WorkingDir, path)
+	return filepath.Join(t.WorkingDir, normalized)
 }
 
 type MultiEditTool struct {
@@ -501,7 +544,7 @@ func NewMultiEditToolWithOptions(projectRoot string, workingDir string, registry
 	}
 	absRoot, _ := filepath.Abs(projectRoot)
 	absWorkingDir := absRoot
-	if strings.TrimSpace(workingDir) != "" {
+	if workingDir != "" {
 		absWorkingDir, _ = filepath.Abs(workingDir)
 	}
 	base := tools.NewBaseTool("MultiEdit", "批量替换文件内容，支持原子性和冲突检测", false)
@@ -525,9 +568,10 @@ func (t *MultiEditTool) GetParameters() []tools.ToolParameter {
 func (t *MultiEditTool) Run(parameters map[string]any) tools.ToolResponse {
 	path, _ := parameters["path"].(string)
 	rawEdits, ok := parameters["edits"].([]any)
-	cachedMtime := int64(intFromAny(parameters["file_mtime_ms"]))
+	rawCachedMtime, hasCachedMtime := parameters["file_mtime_ms"]
+	cachedMtime := int64(intFromAny(rawCachedMtime))
 
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return tools.Error("缺少必需参数: path", tools.ToolErrorCodeInvalidParam, nil)
 	}
 	if !ok || len(rawEdits) == 0 {
@@ -540,11 +584,14 @@ func (t *MultiEditTool) Run(parameters map[string]any) tools.ToolResponse {
 		if os.IsNotExist(err) {
 			return tools.Error(fmt.Sprintf("文件 '%s' 不存在", path), tools.ToolErrorCodeNotFound, nil)
 		}
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("批量编辑失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
 	currentMtime := st.ModTime().UnixMilli()
-	if cachedMtime != 0 && currentMtime != cachedMtime {
+	if hasCachedMtime && currentMtime != cachedMtime {
 		return tools.Error(
 			fmt.Sprintf("文件自上次读取后被修改。所有替换已取消。当前 mtime=%d, 缓存 mtime=%d", currentMtime, cachedMtime),
 			tools.ToolErrorCodeConflict,
@@ -554,6 +601,9 @@ func (t *MultiEditTool) Run(parameters map[string]any) tools.ToolResponse {
 
 	contentBytes, err := os.ReadFile(fullPath)
 	if err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("批量编辑失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 	content := string(contentBytes)
@@ -570,11 +620,13 @@ func (t *MultiEditTool) Run(parameters map[string]any) tools.ToolResponse {
 		if em == nil {
 			return tools.Error(fmt.Sprintf("编辑项 %d 缺少 old_string 或 new_string", i), tools.ToolErrorCodeInvalidParam, nil)
 		}
-		oldStr := fmt.Sprintf("%v", em["old_string"])
-		newStr := fmt.Sprintf("%v", em["new_string"])
-		if oldStr == "<nil>" || newStr == "<nil>" {
+		oldRaw, oldExists := em["old_string"]
+		newRaw, newExists := em["new_string"]
+		if !oldExists || !newExists || oldRaw == nil || newRaw == nil {
 			return tools.Error(fmt.Sprintf("编辑项 %d 缺少 old_string 或 new_string", i), tools.ToolErrorCodeInvalidParam, nil)
 		}
+		oldStr := fmt.Sprintf("%v", oldRaw)
+		newStr := fmt.Sprintf("%v", newRaw)
 		matches := strings.Count(content, oldStr)
 		if matches != 1 {
 			return tools.Error(
@@ -590,8 +642,17 @@ func (t *MultiEditTool) Run(parameters map[string]any) tools.ToolResponse {
 		content = strings.Replace(content, e.Old, e.New, 1)
 	}
 
-	backupPath, _ := t.backupFile(fullPath)
+	backupPath, err := t.backupFile(fullPath)
+	if err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
+		return tools.Error(fmt.Sprintf("批量编辑失败：%v", err), tools.ToolErrorCodeInternalError, nil)
+	}
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		if isPermissionError(err) {
+			return tools.Error(fmt.Sprintf("无权限编辑 '%s'", path), tools.ToolErrorCodePermissionDenied, nil)
+		}
 		return tools.Error(fmt.Sprintf("批量编辑失败：%v", err), tools.ToolErrorCodeInternalError, nil)
 	}
 
@@ -626,10 +687,11 @@ func (t *MultiEditTool) backupFile(fullPath string) (string, error) {
 }
 
 func (t *MultiEditTool) resolvePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	if filepath.IsAbs(normalized) {
+		return normalized
 	}
-	return filepath.Join(t.WorkingDir, path)
+	return filepath.Join(t.WorkingDir, normalized)
 }
 
 func formatSize(size int64) string {
@@ -649,7 +711,7 @@ func formatTime(ts time.Time) string {
 }
 
 func relOrOriginal(path string, base string) string {
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return ""
 	}
 	rel, err := filepath.Rel(base, path)
@@ -661,8 +723,15 @@ func relOrOriginal(path string, base string) string {
 
 func intFromAny(v any) int {
 	switch n := v.(type) {
+	case bool:
+		if n {
+			return 1
+		}
+		return 0
 	case int:
 		return n
+	case int32:
+		return int(n)
 	case int64:
 		return int(n)
 	case float64:
@@ -670,12 +739,16 @@ func intFromAny(v any) int {
 	case float32:
 		return int(n)
 	case string:
-		var parsed int
-		if _, err := fmt.Sscanf(strings.TrimSpace(n), "%d", &parsed); err == nil {
+		parsed, err := strconv.Atoi(strings.TrimSpace(n))
+		if err == nil {
 			return parsed
 		}
 		return 0
 	default:
 		return 0
 	}
+}
+
+func isPermissionError(err error) bool {
+	return errors.Is(err, fs.ErrPermission)
 }

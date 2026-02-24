@@ -73,12 +73,13 @@ type StreamBuffer struct {
 }
 
 func NewStreamBuffer(maxBufferSize int) *StreamBuffer {
-	if maxBufferSize <= 0 {
-		maxBufferSize = 100
+	capSize := maxBufferSize
+	if capSize < 0 {
+		capSize = 0
 	}
 	return &StreamBuffer{
 		MaxBufferSize: maxBufferSize,
-		events:        make([]StreamEvent, 0, maxBufferSize),
+		events:        make([]StreamEvent, 0, capSize),
 	}
 }
 

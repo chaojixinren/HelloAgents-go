@@ -58,9 +58,6 @@ func NewReActAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, c
 	if systemPrompt == "" {
 		systemPrompt = defaultReActSystemPrompt
 	}
-	if maxSteps <= 0 {
-		maxSteps = 5
-	}
 
 	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
 	if err != nil {
@@ -80,9 +77,6 @@ func NewReActAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, c
 			return agent.MaxSteps
 		},
 		func(v int) {
-			if v <= 0 {
-				return
-			}
 			agent.MaxSteps = v
 			base.MaxSteps = v
 		},
@@ -347,9 +341,13 @@ func (a *ReActAgent) Arun(inputText string, hooks core.Hooks, kwargs map[string]
 		toolResults := a.executeToolsAsync(toolCalls, currentStep, hooks.OnToolCall)
 		for _, item := range toolResults {
 			if item.ToolName == "Finish" && toBool(item.Result["finished"]) {
-				finalAnswer := fmt.Sprintf("%v", item.Result["final_answer"])
-				if finalAnswer == "" || finalAnswer == "<nil>" {
-					finalAnswer = fmt.Sprintf("%v", item.Result["content"])
+				finalAnswer := ""
+				if rawFinalAnswer, exists := item.Result["final_answer"]; exists && rawFinalAnswer != nil {
+					if casted, ok := rawFinalAnswer.(string); ok {
+						finalAnswer = casted
+					} else {
+						finalAnswer = fmt.Sprintf("%v", rawFinalAnswer)
+					}
 				}
 				a.SessionMetadata["total_steps"] = currentStep
 				a.SessionMetadata["total_tokens"] = totalTokens
@@ -627,9 +625,6 @@ func (a *ReActAgent) executeToolsAsync(
 
 	if len(userCalls) > 0 {
 		maxConcurrent := a.Config.MaxConcurrentTools
-		if maxConcurrent <= 0 {
-			maxConcurrent = 3
-		}
 		sem := make(chan struct{}, maxConcurrent)
 		ordered := make([]reactToolExecutionResult, len(userCalls))
 		var wg sync.WaitGroup
@@ -665,12 +660,19 @@ func (a *ReActAgent) executeToolsAsync(
 
 				resultContent := fmt.Sprintf("❌ 工具 %s 不存在", call.Name)
 				if tool := a.ToolRegistry.GetTool(call.Name); tool != nil {
-					toolResponse := tool.ARunWithTiming(args)
-					resultContent = toolResponse.Text
-					if a.Truncator != nil {
-						preview, _ := a.Truncator.Truncate(resultContent, call.Name)
-						resultContent = preview
-					}
+					func() {
+						defer func() {
+							if p := recover(); p != nil {
+								resultContent = fmt.Sprintf("❌ 工具执行失败: %v", p)
+							}
+						}()
+						toolResponse := tool.ARunWithTiming(args)
+						resultContent = toolResponse.Text
+						if a.Truncator != nil {
+							preview, _ := a.Truncator.Truncate(resultContent, call.Name)
+							resultContent = preview
+						}
+					}()
 				}
 
 				if a.TraceLogger != nil {
@@ -765,9 +767,6 @@ func (a *ReActAgent) executeToolsAsyncStream(
 	}
 
 	maxConcurrent := a.Config.MaxConcurrentTools
-	if maxConcurrent <= 0 {
-		maxConcurrent = 3
-	}
 	sem := make(chan struct{}, maxConcurrent)
 	ordered := make([]reactToolExecutionResult, len(userCalls))
 	var wg sync.WaitGroup
@@ -804,12 +803,19 @@ func (a *ReActAgent) executeToolsAsyncStream(
 			resultContent := fmt.Sprintf("❌ 工具 %s 不存在", call.Name)
 			if a.ToolRegistry != nil {
 				if tool := a.ToolRegistry.GetTool(call.Name); tool != nil {
-					toolResponse := tool.ARunWithTiming(args)
-					resultContent = toolResponse.Text
-					if a.Truncator != nil {
-						preview, _ := a.Truncator.Truncate(resultContent, call.Name)
-						resultContent = preview
-					}
+					func() {
+						defer func() {
+							if p := recover(); p != nil {
+								resultContent = fmt.Sprintf("❌ 工具执行失败: %v", p)
+							}
+						}()
+						toolResponse := tool.ARunWithTiming(args)
+						resultContent = toolResponse.Text
+						if a.Truncator != nil {
+							preview, _ := a.Truncator.Truncate(resultContent, call.Name)
+							resultContent = preview
+						}
+					}()
 				}
 			}
 

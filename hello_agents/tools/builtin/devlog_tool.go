@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -48,7 +47,7 @@ func NewDevLogEntry(category, content string, metadata map[string]any) DevLogEnt
 	}
 	return DevLogEntry{
 		ID:        "log-" + randomHex(4),
-		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Timestamp: nowPythonISOTime(),
 		Category:  category,
 		Content:   content,
 		Metadata:  metadata,
@@ -97,7 +96,7 @@ type DevLogStore struct {
 }
 
 func NewDevLogStore(sessionID, agentName string) DevLogStore {
-	now := time.Now().Format(time.RFC3339Nano)
+	now := nowPythonISOTime()
 	return DevLogStore{
 		SessionID: sessionID,
 		AgentName: agentName,
@@ -109,7 +108,7 @@ func NewDevLogStore(sessionID, agentName string) DevLogStore {
 
 func (s *DevLogStore) Append(entry DevLogEntry) {
 	s.Entries = append(s.Entries, entry)
-	s.UpdatedAt = time.Now().Format(time.RFC3339Nano)
+	s.UpdatedAt = nowPythonISOTime()
 }
 
 func (s *DevLogStore) FilterEntries(category string, tags []string, limit int) []DevLogEntry {
@@ -145,9 +144,6 @@ func (s *DevLogStore) GenerateSummary(limit int) string {
 	if len(s.Entries) == 0 {
 		return "📝 暂无开发日志"
 	}
-	if limit <= 0 {
-		limit = 10
-	}
 
 	stats := s.GetStats()
 	total, _ := stats["total_entries"].(int)
@@ -155,31 +151,32 @@ func (s *DevLogStore) GenerateSummary(limit int) string {
 
 	summaryParts := []string{fmt.Sprintf("📝 共 %d 条日志", total)}
 
-	categoryParts := make([]string, 0)
-	used := map[string]struct{}{}
-	for _, category := range categoryOrder {
-		count, ok := byCategory[category]
-		if !ok {
+	// Follow Python dict insertion semantics: category order is first appearance in entries.
+	categoryParts := make([]string, 0, len(byCategory))
+	seenCategories := map[string]struct{}{}
+	for _, entry := range s.Entries {
+		if _, seen := seenCategories[entry.Category]; seen {
 			continue
 		}
-		used[category] = struct{}{}
-		categoryParts = append(categoryParts, fmt.Sprintf("%s(%d)", category, count))
-	}
-	extra := make([]string, 0)
-	for category := range byCategory {
-		if _, ok := used[category]; !ok {
-			extra = append(extra, category)
-		}
-	}
-	sort.Strings(extra)
-	for _, category := range extra {
-		categoryParts = append(categoryParts, fmt.Sprintf("%s(%d)", category, byCategory[category]))
+		seenCategories[entry.Category] = struct{}{}
+		categoryParts = append(categoryParts, fmt.Sprintf("%s(%d)", entry.Category, byCategory[entry.Category]))
 	}
 	summaryParts = append(summaryParts, "分类: "+strings.Join(categoryParts, ", "))
 
 	recent := s.Entries
-	if len(recent) > limit {
-		recent = recent[len(recent)-limit:]
+	switch {
+	case limit > 0:
+		if len(recent) > limit {
+			recent = recent[len(recent)-limit:]
+		}
+	case limit == 0:
+		// Python slice behavior: entries[-0:] keeps all entries.
+	default:
+		start := -limit
+		if start > len(recent) {
+			start = len(recent)
+		}
+		recent = recent[start:]
 	}
 	if len(recent) > 0 {
 		start := len(recent) - 3
@@ -256,17 +253,8 @@ type DevLogTool struct {
 }
 
 func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *DevLogTool {
-	if sessionID == "" {
-		sessionID = fmt.Sprintf("s-%d", time.Now().Unix())
-	}
-	if agentName == "" {
-		agentName = "Agent"
-	}
 	if projectRoot == "" {
 		projectRoot = "."
-	}
-	if persistenceDir == "" {
-		persistenceDir = "memory/devlogs"
 	}
 
 	categoryLines := make([]string, 0, len(categoryOrder))
@@ -348,7 +336,17 @@ func (t *DevLogTool) GetParameters() []tools.ToolParameter {
 	return t.BaseTool.GetParameters()
 }
 
-func (t *DevLogTool) Run(parameters map[string]any) tools.ToolResponse {
+func (t *DevLogTool) Run(parameters map[string]any) (resp tools.ToolResponse) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			resp = tools.Error(
+				fmt.Sprintf("DevLog 操作失败：%v", recovered),
+				tools.ToolErrorCodeInternalError,
+				nil,
+			)
+		}
+	}()
+
 	action, _ := parameters["action"].(string)
 
 	switch action {
@@ -370,8 +368,8 @@ func (t *DevLogTool) Run(parameters map[string]any) tools.ToolResponse {
 }
 
 func (t *DevLogTool) handleAppend(parameters map[string]any) tools.ToolResponse {
-	category, _ := parameters["category"].(string)
-	content, _ := parameters["content"].(string)
+	category := devlogStringValue(parameters["category"])
+	content := devlogStringValue(parameters["content"])
 
 	if category == "" {
 		return tools.Error("追加日志时必须指定 category", tools.ToolErrorCodeInvalidParam, nil)
@@ -383,7 +381,7 @@ func (t *DevLogTool) handleAppend(parameters map[string]any) tools.ToolResponse 
 			nil,
 		)
 	}
-	if strings.TrimSpace(content) == "" {
+	if content == "" {
 		return tools.Error("追加日志时必须指定 content", tools.ToolErrorCodeInvalidParam, nil)
 	}
 
@@ -394,7 +392,9 @@ func (t *DevLogTool) handleAppend(parameters map[string]any) tools.ToolResponse 
 
 	entry := NewDevLogEntry(category, content, metadata)
 	t.store.Append(entry)
-	t.persist()
+	if err := t.persist(); err != nil {
+		panic(err)
+	}
 
 	displayContent := content
 	if len(displayContent) > 50 {
@@ -459,8 +459,10 @@ func (t *DevLogTool) handleSummary() tools.ToolResponse {
 func (t *DevLogTool) handleClear() tools.ToolResponse {
 	oldCount := len(t.store.Entries)
 	t.store.Entries = []DevLogEntry{}
-	t.store.UpdatedAt = time.Now().Format(time.RFC3339Nano)
-	t.persist()
+	t.store.UpdatedAt = nowPythonISOTime()
+	if err := t.persist(); err != nil {
+		panic(err)
+	}
 
 	return tools.Success(
 		fmt.Sprintf("✅ 已清空 %d 条日志", oldCount),
@@ -468,20 +470,23 @@ func (t *DevLogTool) handleClear() tools.ToolResponse {
 	)
 }
 
-func (t *DevLogTool) persist() {
+func (t *DevLogTool) persist() error {
 	filename := fmt.Sprintf("devlog-%s.json", t.sessionID)
-	filepath := filepath.Join(t.persistenceDir, filename)
+	filePath := filepath.Join(t.persistenceDir, filename)
 
 	payload, err := json.MarshalIndent(t.store.ToMap(), "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 
-	tmpPath := strings.TrimSuffix(filepath, ".json") + ".tmp"
+	tmpPath := strings.TrimSuffix(filePath, ".json") + ".tmp"
 	if err := os.WriteFile(tmpPath, payload, 0o644); err != nil {
-		return
+		return err
 	}
-	_ = os.Rename(tmpPath, filepath)
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *DevLogTool) loadIfExists() {
@@ -532,7 +537,6 @@ func parseStringList(value any) []string {
 	case []string:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
-			item = strings.TrimSpace(item)
 			if item != "" {
 				out = append(out, item)
 			}
@@ -541,15 +545,15 @@ func parseStringList(value any) []string {
 	case []any:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
-			text := strings.TrimSpace(fmt.Sprintf("%v", item))
-			if text != "" && text != "<nil>" {
+			text := devlogStringValue(item)
+			if text != "" {
 				out = append(out, text)
 			}
 		}
 		return out
 	default:
-		text := strings.TrimSpace(fmt.Sprintf("%v", typed))
-		if text == "" || text == "<nil>" {
+		text := devlogStringValue(typed)
+		if text == "" {
 			return nil
 		}
 		return []string{text}
@@ -565,4 +569,14 @@ func randomHex(size int) string {
 		return fmt.Sprintf("%08x", time.Now().UnixNano())[:size*2]
 	}
 	return hex.EncodeToString(b)
+}
+
+func devlogStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprintf("%v", value)
 }

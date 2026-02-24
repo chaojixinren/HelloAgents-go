@@ -63,27 +63,25 @@ func (t *SkillTool) GetParameters() []tools.ToolParameter {
 	return t.BaseTool.GetParameters()
 }
 
-func (t *SkillTool) Run(parameters map[string]any) tools.ToolResponse {
-	skillName := strings.TrimSpace(fmt.Sprintf("%v", parameters["skill"]))
-	if skillName == "" || skillName == "<nil>" {
+func (t *SkillTool) Run(parameters map[string]any) (resp tools.ToolResponse) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			errText := fmt.Sprintf("%v", recovered)
+			resp = tools.Error(
+				fmt.Sprintf("加载技能失败：%s", errText),
+				tools.ToolErrorCodeInternalError,
+				map[string]any{"params_input": parameters, "error": errText},
+			)
+		}
+	}()
+
+	skillName, _ := parameters["skill"].(string)
+	if skillName == "" {
 		return tools.Error(
 			"必须指定技能名称",
 			tools.ToolErrorCodeInvalidParam,
 			map[string]any{"params_input": parameters},
 		)
-	}
-
-	if t.skillLoader == nil {
-		return tools.Error(
-			"加载技能失败：skill_loader 未初始化",
-			tools.ToolErrorCodeInternalError,
-			map[string]any{"params_input": parameters},
-		)
-	}
-
-	args := ""
-	if raw, ok := parameters["args"]; ok && raw != nil {
-		args = fmt.Sprintf("%v", raw)
 	}
 
 	skill, err := t.skillLoader.GetSkill(skillName)
@@ -101,6 +99,15 @@ func (t *SkillTool) Run(parameters map[string]any) tools.ToolResponse {
 			tools.ToolErrorCodeNotFound,
 			map[string]any{"params_input": parameters, "available_skills": available},
 		)
+	}
+
+	args := ""
+	if raw, ok := parameters["args"]; ok && raw != nil {
+		var castOK bool
+		args, castOK = raw.(string)
+		if !castOK {
+			panic(fmt.Sprintf("replace() argument 2 must be str, not %T", raw))
+		}
 	}
 
 	content := strings.ReplaceAll(skill.Body, "$ARGUMENTS", args)

@@ -4,7 +4,10 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 
 // ConversationMessage is a lightweight history item for ContextBuilder.
@@ -30,7 +33,7 @@ func NewContextPacket(content string, timestamp *time.Time, metadata map[string]
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	if tokenCount <= 0 {
+	if tokenCount == 0 {
 		tokenCount = countTokens(content)
 	}
 	return ContextPacket{
@@ -75,18 +78,6 @@ type ContextBuilder struct {
 func NewContextBuilder(config ContextConfig) *ContextBuilder {
 	if config == (ContextConfig{}) {
 		config = DefaultContextConfig()
-	}
-	if config.MaxTokens <= 0 {
-		config.MaxTokens = 8000
-	}
-	if config.ReserveRatio <= 0 || config.ReserveRatio >= 1 {
-		config.ReserveRatio = 0.15
-	}
-	if config.MinRelevance < 0 {
-		config.MinRelevance = 0.3
-	}
-	if config.MMRLambda <= 0 || config.MMRLambda > 1 {
-		config.MMRLambda = 0.7
 	}
 	return &ContextBuilder{Config: config}
 }
@@ -150,7 +141,7 @@ func (b *ContextBuilder) gather(
 		if packet.Metadata == nil {
 			packet.Metadata = map[string]any{}
 		}
-		if packet.TokenCount <= 0 {
+		if packet.TokenCount == 0 {
 			packet.TokenCount = countTokens(packet.Content)
 		}
 		packets = append(packets, packet)
@@ -344,6 +335,26 @@ func splitLowerTokens(text string) map[string]struct{} {
 	return out
 }
 
+var (
+	contextBuilderEncoding     *tiktoken.Tiktoken
+	contextBuilderEncodingOnce sync.Once
+)
+
+func getContextBuilderEncoding() *tiktoken.Tiktoken {
+	contextBuilderEncodingOnce.Do(func() {
+		encoding, err := tiktoken.GetEncoding("cl100k_base")
+		if err != nil {
+			contextBuilderEncoding = nil
+			return
+		}
+		contextBuilderEncoding = encoding
+	})
+	return contextBuilderEncoding
+}
+
 func countTokens(text string) int {
+	if encoding := getContextBuilderEncoding(); encoding != nil {
+		return len(encoding.Encode(text, nil, nil))
+	}
 	return len([]rune(text)) / 4
 }

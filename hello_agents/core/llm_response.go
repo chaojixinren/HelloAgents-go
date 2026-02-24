@@ -20,6 +20,15 @@ func (r LLMResponse) Repr() string {
 	if r.Usage != nil {
 		tokens = r.Usage["total_tokens"]
 	}
+	if r.ReasoningContent != "" {
+		return fmt.Sprintf(
+			"LLMResponse(model=%s, latency=%dms, tokens=%d, has_reasoning=True, content_length=%d)",
+			r.Model,
+			r.LatencyMS,
+			tokens,
+			len(r.Content),
+		)
+	}
 	return fmt.Sprintf("LLMResponse(model=%s, latency=%dms, tokens=%d, content_length=%d)", r.Model, r.LatencyMS, tokens, len(r.Content))
 }
 

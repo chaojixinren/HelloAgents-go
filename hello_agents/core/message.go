@@ -36,10 +36,14 @@ func NewMessage(content string, role MessageRole, metadata map[string]any) Messa
 }
 
 func (m Message) ToMap() map[string]any {
+	var timestamp any
+	if !m.Timestamp.IsZero() {
+		timestamp = formatPythonISOTime(m.Timestamp)
+	}
 	return map[string]any{
 		"role":      string(m.Role),
 		"content":   m.Content,
-		"timestamp": m.Timestamp.Format(time.RFC3339Nano),
+		"timestamp": timestamp,
 		"metadata":  m.Metadata,
 	}
 }
@@ -65,8 +69,7 @@ func MessageFromMap(data map[string]any) (Message, error) {
 	msg.Role = MessageRole(role)
 
 	if ts, ok := data["timestamp"].(string); ok && ts != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, ts)
-		if err == nil {
+		if parsed, err := parsePythonISOTime(ts); err == nil {
 			msg.Timestamp = parsed
 		}
 	}

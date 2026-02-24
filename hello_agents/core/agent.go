@@ -2,12 +2,16 @@ package core
 
 import (
 	stdctx "context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +63,7 @@ type BaseAgent struct {
 	runDelegate  func(inputText string, kwargs map[string]any) (string, error)
 	getMaxSteps  func() int
 	setMaxSteps  func(v int)
+	hasMaxSteps  bool
 
 	HistoryTokenCount int
 	SessionMetadata   map[string]any
@@ -82,7 +87,7 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 			return NewMessage(
 				"## Archived Session Summary\n"+summary,
 				MessageRoleSummary,
-				map[string]any{"compressed_at": time.Now().Format(time.RFC3339Nano)},
+				map[string]any{"compressed_at": nowPythonISOTime()},
 			)
 		},
 		func(msg Message) string {
@@ -112,7 +117,7 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 		TokenCounter:   tokenCounter,
 		StartTime:      time.Now(),
 		SessionMetadata: map[string]any{
-			"created_at":       time.Now().Format(time.RFC3339Nano),
+			"created_at":       nowPythonISOTime(),
 			"total_tokens":     0,
 			"total_steps":      0,
 			"duration_seconds": 0,
@@ -122,9 +127,6 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 		return agent.MaxSteps
 	}
 	agent.setMaxSteps = func(v int) {
-		if v <= 0 {
-			return
-		}
 		agent.MaxSteps = v
 	}
 
@@ -171,6 +173,7 @@ func (a *BaseAgent) SetRunDelegate(runDelegate func(inputText string, kwargs map
 func (a *BaseAgent) SetMaxStepAccessors(getter func() int, setter func(v int)) {
 	a.getMaxSteps = getter
 	a.setMaxSteps = setter
+	a.hasMaxSteps = true
 }
 
 func (a *BaseAgent) Arun(inputText string, hooks Hooks, kwargs map[string]any) (string, error) {
@@ -178,7 +181,11 @@ func (a *BaseAgent) Arun(inputText string, hooks Hooks, kwargs map[string]any) (
 		return "", err
 	}
 
-	result, err := a.Run(inputText, kwargs)
+	runner := a.Run
+	if a.runDelegate != nil {
+		runner = a.runDelegate
+	}
+	result, err := runner(inputText, kwargs)
 	if err != nil {
 		_ = a.emitEvent(AgentError, hooks.OnError, map[string]any{"error": err.Error(), "error_type": "AgentError"})
 		return "", err
@@ -202,7 +209,11 @@ func (a *BaseAgent) ArunStream(inputText string, kwargs map[string]any, hooks ..
 			_ = activeHooks.OnStart(startEvent)
 		}
 		out <- startEvent
-		result, err := a.Run(inputText, kwargs)
+		runner := a.Run
+		if a.runDelegate != nil {
+			runner = a.runDelegate
+		}
+		result, err := runner(inputText, kwargs)
 		if err != nil {
 			errorEvent := NewAgentEvent(AgentError, a.Name, map[string]any{"error": err.Error(), "error_type": "AgentError"})
 			if activeHooks.OnError != nil {
@@ -257,7 +268,7 @@ func (a *BaseAgent) AddMessage(message Message) {
 
 	if a.Config.AutoSaveEnabled && a.SessionStore != nil {
 		historyLen := len(a.HistoryManager.GetHistory())
-		if a.Config.AutoSaveInterval > 0 && historyLen%a.Config.AutoSaveInterval == 0 {
+		if historyLen%a.Config.AutoSaveInterval == 0 {
 			a.AutoSave()
 		}
 	}
@@ -336,9 +347,7 @@ func (a *BaseAgent) GenerateSmartSummary(history []Message) string {
 
 	summaryLLM, err := a.getSummaryLLM()
 	if err != nil {
-		if a.Config.Debug {
-			fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
-		}
+		fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
 		return a.GenerateSimpleSummary(history)
 	}
 
@@ -353,9 +362,7 @@ func (a *BaseAgent) GenerateSmartSummary(history []Message) string {
 		},
 	)
 	if err != nil {
-		if a.Config.Debug {
-			fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
-		}
+		fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
 		return a.GenerateSimpleSummary(history)
 	}
 
@@ -387,25 +394,17 @@ func (a *BaseAgent) getSummaryLLM() (*HelloAgentsLLM, error) {
 		return a.summaryLLM, nil
 	}
 
-	if a.LLM == nil {
-		return nil, fmt.Errorf("llm is not initialized")
-	}
-
-	model := strings.TrimSpace(a.Config.SummaryLLMModel)
-	if model == "" {
-		model = a.LLM.Model
-	}
+	model := a.Config.SummaryLLMModel
 
 	maxTokens := a.Config.SummaryMaxTokens
-	timeout := a.LLM.Timeout
 
 	llm, err := NewHelloAgentsLLM(
 		model,
-		a.LLM.APIKey,
-		a.LLM.BaseURL,
+		"",
+		"",
 		a.Config.SummaryTemperature,
 		&maxTokens,
-		&timeout,
+		nil,
 		map[string]any{"provider": a.Config.SummaryLLMProvider},
 	)
 	if err != nil {
@@ -416,8 +415,8 @@ func (a *BaseAgent) getSummaryLLM() (*HelloAgentsLLM, error) {
 	return a.summaryLLM, nil
 }
 
-func mapParameterType(paramType string) string {
-	normalized := strings.ToLower(strings.TrimSpace(paramType))
+func (a *BaseAgent) mapParameterType(paramType string) string {
+	normalized := strings.ToLower(paramType)
 	switch normalized {
 	case "string", "number", "integer", "boolean", "array", "object":
 		return normalized
@@ -426,10 +425,20 @@ func mapParameterType(paramType string) string {
 	}
 }
 
-func convertParameterTypes(params []tools.ToolParameter, input map[string]any) map[string]any {
+func (a *BaseAgent) convertParameterTypes(toolName string, input map[string]any) map[string]any {
+	if a.ToolRegistry == nil {
+		return input
+	}
+
+	tool := a.ToolRegistry.GetTool(toolName)
+	if tool == nil {
+		return input
+	}
+
+	params := tool.GetParameters()
 	typeMap := map[string]string{}
 	for _, p := range params {
-		typeMap[p.Name] = strings.ToLower(strings.TrimSpace(p.Type))
+		typeMap[p.Name] = strings.ToLower(p.Type)
 	}
 	converted := map[string]any{}
 	for key, value := range input {
@@ -445,9 +454,15 @@ func convertParameterTypes(params []tools.ToolParameter, input map[string]any) m
 				converted[key] = float64(v)
 			case int64:
 				converted[key] = float64(v)
+			case bool:
+				if v {
+					converted[key] = float64(1)
+				} else {
+					converted[key] = float64(0)
+				}
 			case string:
-				var parsed float64
-				if _, err := fmt.Sscanf(v, "%f", &parsed); err == nil {
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+				if err == nil {
 					converted[key] = parsed
 				} else {
 					converted[key] = value
@@ -463,10 +478,16 @@ func convertParameterTypes(params []tools.ToolParameter, input map[string]any) m
 				converted[key] = int(v)
 			case float64:
 				converted[key] = int(v)
+			case bool:
+				if v {
+					converted[key] = 1
+				} else {
+					converted[key] = 0
+				}
 			case string:
-				var parsed int
-				if _, err := fmt.Sscanf(v, "%d", &parsed); err == nil {
-					converted[key] = parsed
+				parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+				if err == nil {
+					converted[key] = int(parsed)
 				} else {
 					converted[key] = value
 				}
@@ -478,18 +499,67 @@ func convertParameterTypes(params []tools.ToolParameter, input map[string]any) m
 			case bool:
 				converted[key] = v
 			case string:
-				lower := strings.ToLower(strings.TrimSpace(v))
+				lower := strings.ToLower(v)
 				converted[key] = lower == "true" || lower == "1" || lower == "yes"
 			case int:
 				converted[key] = v != 0
 			default:
-				converted[key] = value
+				converted[key] = pythonTruthy(value)
 			}
 		default:
 			converted[key] = value
 		}
 	}
 	return converted
+}
+
+func pythonTruthy(value any) bool {
+	if value == nil {
+		return false
+	}
+
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return len(v) > 0
+	case int:
+		return v != 0
+	case int8:
+		return v != 0
+	case int16:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case uint:
+		return v != 0
+	case uint8:
+		return v != 0
+	case uint16:
+		return v != 0
+	case uint32:
+		return v != 0
+	case uint64:
+		return v != 0
+	case uintptr:
+		return v != 0
+	case float32:
+		return v != 0
+	case float64:
+		return v != 0
+	}
+
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Array, reflect.Slice, reflect.Map, reflect.String:
+		return rv.Len() > 0
+	case reflect.Chan, reflect.Func, reflect.Pointer, reflect.Interface:
+		return !rv.IsNil()
+	default:
+		return true
+	}
 }
 
 func (a *BaseAgent) BuildToolSchemas() []map[string]any {
@@ -501,12 +571,22 @@ func (a *BaseAgent) BuildToolSchemas() []map[string]any {
 
 	// Tool object schemas.
 	for _, tool := range a.ToolRegistry.GetAllTools() {
+		params := []tools.ToolParameter{}
+		func() {
+			defer func() {
+				if recover() != nil {
+					params = []tools.ToolParameter{}
+				}
+			}()
+			params = tool.GetParameters()
+		}()
+
 		properties := map[string]any{}
 		required := make([]string, 0)
 
-		for _, param := range tool.GetParameters() {
+		for _, param := range params {
 			prop := map[string]any{
-				"type":        mapParameterType(param.Type),
+				"type":        a.mapParameterType(param.Type),
 				"description": param.Description,
 			}
 			if param.Default != nil {
@@ -537,8 +617,13 @@ func (a *BaseAgent) BuildToolSchemas() []map[string]any {
 		schemas = append(schemas, schema)
 	}
 
-	// Function tools.
-	for name, info := range a.ToolRegistry.GetAllFunctions() {
+	// Function tools (keep registration order, aligned with Python dict order).
+	functionMap := a.ToolRegistry.GetAllFunctions()
+	for _, name := range a.ToolRegistry.ListFunctions() {
+		info, ok := functionMap[name]
+		if !ok {
+			continue
+		}
 		schemas = append(schemas, map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -568,8 +653,20 @@ func (a *BaseAgent) ExecuteToolCall(toolName string, arguments map[string]any) s
 
 	// 1) Tool object
 	if tool := a.ToolRegistry.GetTool(toolName); tool != nil {
-		typedArguments := convertParameterTypes(tool.GetParameters(), arguments)
-		response := tool.RunWithTiming(typedArguments)
+		var response tools.ToolResponse
+		var recovered any
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					recovered = p
+				}
+			}()
+			typedArguments := a.convertParameterTypes(toolName, arguments)
+			response = tool.RunWithTiming(typedArguments)
+		}()
+		if recovered != nil {
+			return fmt.Sprintf("❌ 工具调用失败：%v", recovered)
+		}
 
 		switch response.Status {
 		case tools.ToolStatusError:
@@ -592,8 +689,20 @@ func (a *BaseAgent) ExecuteToolCall(toolName string, arguments map[string]any) s
 			inputText = fmt.Sprintf("%v", v)
 		}
 
-		response := a.ToolRegistry.ExecuteTool(toolName, inputText)
-		_ = fn // explicit use for parity readability
+		var response tools.ToolResponse
+		var recovered any
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					recovered = p
+				}
+			}()
+			response = a.ToolRegistry.ExecuteTool(toolName, inputText)
+		}()
+		if recovered != nil {
+			return fmt.Sprintf("❌ 工具调用失败：%v", recovered)
+		}
+
 		switch response.Status {
 		case tools.ToolStatusError:
 			code := "UNKNOWN"
@@ -616,7 +725,7 @@ func (a *BaseAgent) AutoSave() {
 		return
 	}
 
-	_, _ = a.SessionStore.Save(
+	_, err := a.SessionStore.Save(
 		a.GetAgentConfig(),
 		a.HistoryManager.GetHistory(),
 		a.ComputeToolSchemaHash(),
@@ -624,6 +733,9 @@ func (a *BaseAgent) AutoSave() {
 		a.SessionMetadata,
 		"session-auto",
 	)
+	if err != nil && a.Config.Debug {
+		fmt.Printf("⚠️ 自动保存失败: %v\n", err)
+	}
 }
 
 func (a *BaseAgent) SaveSession(sessionName string) (string, error) {
@@ -694,7 +806,7 @@ func (a *BaseAgent) LoadSession(filepath string, checkConsistency bool) error {
 	a.SessionMetadata = record.Metadata
 	a.HistoryTokenCount = a.TokenCounter.CountMessages(a.HistoryManager.GetHistory())
 
-	if a.ToolRegistry != nil {
+	if a.ToolRegistry != nil && len(record.ReadCache) > 0 {
 		a.ToolRegistry.ClearReadCache(nil)
 		for filePath, metadata := range record.ReadCache {
 			a.ToolRegistry.CacheReadMetadata(filePath, metadata)
@@ -713,15 +825,15 @@ func (a *BaseAgent) ListSessions() ([]map[string]any, error) {
 
 func (a *BaseAgent) GetAgentConfig() map[string]any {
 	agentType := a.AgentType
-	if strings.TrimSpace(agentType) == "" {
+	if agentType == "" {
 		agentType = "BaseAgent"
 	}
 	llmProvider := "unknown"
-	if a.LLM != nil && strings.TrimSpace(a.LLM.Provider) != "" {
+	if a.LLM != nil && a.LLM.Provider != "" {
 		llmProvider = a.LLM.Provider
 	}
 	llmModel := "unknown"
-	if a.LLM != nil && strings.TrimSpace(a.LLM.Model) != "" {
+	if a.LLM != nil && a.LLM.Model != "" {
 		llmModel = a.LLM.Model
 	}
 
@@ -731,8 +843,12 @@ func (a *BaseAgent) GetAgentConfig() map[string]any {
 		"llm_provider": llmProvider,
 		"llm_model":    llmModel,
 	}
-	if a.MaxSteps > 0 {
-		cfg["max_steps"] = a.MaxSteps
+	if a.hasMaxSteps {
+		if a.getMaxSteps != nil {
+			cfg["max_steps"] = a.getMaxSteps()
+		} else {
+			cfg["max_steps"] = a.MaxSteps
+		}
 	}
 	return cfg
 }
@@ -743,7 +859,9 @@ func (a *BaseAgent) ComputeToolSchemaHash() string {
 	}
 
 	toolSignature := map[string]any{}
-	for _, toolName := range a.ToolRegistry.ListTools() {
+	toolNames := append([]string(nil), a.ToolRegistry.ListTools()...)
+	sort.Strings(toolNames)
+	for _, toolName := range toolNames {
 		tool := a.ToolRegistry.GetTool(toolName)
 		if tool == nil {
 			continue
@@ -801,12 +919,10 @@ func (a *BaseAgent) RunAsSubagent(task string, toolFilter tools.ToolFilter, retu
 		}
 		return a.MaxSteps
 	}
-	if maxStepsOverride != nil && *maxStepsOverride > 0 {
+	if maxStepsOverride != nil && a.hasMaxSteps {
 		current := currentMaxSteps()
-		if current > 0 {
-			originalMaxSteps = &current
-			applyMaxSteps(*maxStepsOverride)
-		}
+		originalMaxSteps = &current
+		applyMaxSteps(*maxStepsOverride)
 	}
 
 	start := time.Now()
@@ -899,8 +1015,8 @@ func (a *BaseAgent) getSubagentMetadata(history []Message, duration float64, err
 	metadata := map[string]any{
 		"steps":            steps,
 		"tokens":           totalChars / 4,
-		"duration_seconds": float64(int(duration*100)) / 100,
-		"tools_used":       extractToolsFromHistory(history),
+		"duration_seconds": math.Round(duration*100) / 100,
+		"tools_used":       a.extractToolsFromHistory(history),
 	}
 	if errorMsg != "" {
 		metadata["error"] = errorMsg
@@ -908,22 +1024,35 @@ func (a *BaseAgent) getSubagentMetadata(history []Message, duration float64, err
 	return metadata
 }
 
-func extractToolsFromHistory(history []Message) []string {
+func (a *BaseAgent) extractToolsFromHistory(history []Message) []string {
 	toolSet := map[string]struct{}{}
 	re := regexp.MustCompile(`Action:\s*(\w+)\[`)
 
 	for _, msg := range history {
 		if msg.Metadata != nil {
-			if rawCalls, ok := msg.Metadata["tool_calls"].([]any); ok {
-				for _, raw := range rawCalls {
-					callMap, ok := raw.(map[string]any)
+			if rawCalls, ok := msg.Metadata["tool_calls"]; ok {
+				extractToolCallName := func(call map[string]any) {
+					function, ok := call["function"].(map[string]any)
 					if !ok {
-						continue
+						return
 					}
-					if function, ok := callMap["function"].(map[string]any); ok {
-						if name, ok := function["name"].(string); ok && name != "" {
-							toolSet[name] = struct{}{}
+					name, ok := function["name"].(string)
+					if ok {
+						toolSet[name] = struct{}{}
+					}
+				}
+				switch calls := rawCalls.(type) {
+				case []any:
+					for _, raw := range calls {
+						callMap, ok := raw.(map[string]any)
+						if !ok {
+							continue
 						}
+						extractToolCallName(callMap)
+					}
+				case []map[string]any:
+					for _, callMap := range calls {
+						extractToolCallName(callMap)
 					}
 				}
 			}
@@ -967,10 +1096,85 @@ func (a *BaseAgent) GenerateSubagentSummary(task, result string, metadata map[st
 	return strings.Join(parts, "\n")
 }
 
-func (a *BaseAgent) String() string {
-	provider := ""
-	if a.LLM != nil {
-		provider = a.LLM.Provider
+// RegisterTaskTool mirrors Python _register_task_tool flow.
+func (a *BaseAgent) RegisterTaskTool(agentFactory builtin.AgentFactory) {
+	if a.ToolRegistry == nil || agentFactory == nil {
+		return
 	}
-	return fmt.Sprintf("Agent(name=%s, provider=%s)", a.Name, provider)
+	taskTool := builtin.NewTaskTool(agentFactory, a.ToolRegistry)
+	a.ToolRegistry.RegisterTool(taskTool, false)
+}
+
+// RegisterTodoWriteTool mirrors Python _register_todowrite_tool.
+func (a *BaseAgent) RegisterTodoWriteTool() {
+	if a.ToolRegistry == nil {
+		return
+	}
+	todoTool := builtin.NewTodoWriteTool(".", a.Config.TodoWritePersistenceDir)
+	a.ToolRegistry.RegisterTool(todoTool, false)
+}
+
+// RegisterDevLogTool mirrors Python _register_devlog_tool.
+func (a *BaseAgent) RegisterDevLogTool() {
+	if a.ToolRegistry == nil {
+		return
+	}
+	sessionID := ""
+	if a.TraceLogger != nil {
+		sessionID = a.TraceLogger.SessionID
+	}
+	if sessionID == "" {
+		sessionID = a.GenerateSessionID()
+	}
+	devlogTool := builtin.NewDevLogTool(
+		sessionID,
+		a.Name,
+		".",
+		a.Config.DevLogPersistenceDir,
+	)
+	a.ToolRegistry.RegisterTool(devlogTool, false)
+}
+
+// GenerateSessionID mirrors Python _generate_session_id fallback logic.
+func (a *BaseAgent) GenerateSessionID() string {
+	now := time.Now().Format("20060102-150405")
+	randomBytes := make([]byte, 2)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return fmt.Sprintf("s-%s-%04x", now, time.Now().UnixNano()&0xffff)
+	}
+	return fmt.Sprintf("s-%s-%s", now, hex.EncodeToString(randomBytes))
+}
+
+// CreateLightLLM mirrors Python _create_light_llm behavior.
+func (a *BaseAgent) CreateLightLLM() *HelloAgentsLLM {
+	if a.LLM == nil {
+		return nil
+	}
+
+	model := a.Config.SubagentLightLLMModel
+	lightLLM, err := NewHelloAgentsLLM(
+		model,
+		"",
+		"",
+		a.LLM.Temperature,
+		a.LLM.MaxTokens,
+		nil,
+		map[string]any{"provider": a.Config.SubagentLightLLMProvider},
+	)
+	if err != nil {
+		return nil
+	}
+	return lightLLM
+}
+
+func (a *BaseAgent) String() string {
+	model := ""
+	if a.LLM != nil {
+		model = a.LLM.Model
+	}
+	return fmt.Sprintf("Agent(name=%s, model=%s)", a.Name, model)
+}
+
+func (a *BaseAgent) Repr() string {
+	return a.String()
 }

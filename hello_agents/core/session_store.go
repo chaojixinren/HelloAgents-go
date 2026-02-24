@@ -1,14 +1,15 @@
 package core
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -29,7 +30,7 @@ type SessionData struct {
 
 func NewSessionStore(sessionDir string) (*SessionStore, error) {
 	if sessionDir == "" {
-		sessionDir = "memory/sessions"
+		sessionDir = "."
 	}
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return nil, err
@@ -39,8 +40,12 @@ func NewSessionStore(sessionDir string) (*SessionStore, error) {
 
 func (s *SessionStore) generateSessionID() string {
 	now := time.Now().Format("20060102-150405")
-	h := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
-	return fmt.Sprintf("s-%s-%s", now, hex.EncodeToString(h[:])[:8])
+	suffixBytes := make([]byte, 4)
+	if _, err := rand.Read(suffixBytes); err != nil {
+		h := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		return fmt.Sprintf("s-%s-%s", now, hex.EncodeToString(h[:])[:8])
+	}
+	return fmt.Sprintf("s-%s-%s", now, hex.EncodeToString(suffixBytes))
 }
 
 func (s *SessionStore) Save(
@@ -53,7 +58,7 @@ func (s *SessionStore) Save(
 ) (string, error) {
 	sessionID := s.generateSessionID()
 	filename := fmt.Sprintf("session-%s.json", sessionID)
-	if strings.TrimSpace(sessionName) != "" {
+	if sessionName != "" {
 		filename = sessionName + ".json"
 	}
 
@@ -66,15 +71,19 @@ func (s *SessionStore) Save(
 		historyMaps = append(historyMaps, msg.ToMap())
 	}
 
-	createdAt, _ := metadata["created_at"].(string)
-	if createdAt == "" {
-		createdAt = time.Now().Format(time.RFC3339Nano)
+	createdAt := nowPythonISOTime()
+	if rawCreatedAt, exists := metadata["created_at"]; exists {
+		if s, ok := rawCreatedAt.(string); ok {
+			createdAt = s
+		} else {
+			createdAt = fmt.Sprintf("%v", rawCreatedAt)
+		}
 	}
 
 	record := SessionData{
 		SessionID:      sessionID,
 		CreatedAt:      createdAt,
-		SavedAt:        time.Now().Format(time.RFC3339Nano),
+		SavedAt:        nowPythonISOTime(),
 		AgentConfig:    agentConfig,
 		History:        historyMaps,
 		ToolSchemaHash: toolSchemaHash,
@@ -118,13 +127,15 @@ func (s *SessionStore) ListSessions() ([]map[string]any, error) {
 
 	items := make([]map[string]any, 0)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		name := entry.Name()
+		if entry.IsDir() || len(name) < 5 || name[len(name)-5:] != ".json" {
 			continue
 		}
 
 		fullpath := filepath.Join(s.SessionDir, entry.Name())
 		record, err := s.Load(fullpath)
 		if err != nil {
+			fmt.Printf("⚠️ 警告：无法读取 %s: %v\n", fullpath, err)
 			continue
 		}
 
@@ -159,9 +170,9 @@ func (s *SessionStore) CheckConfigConsistency(savedConfig, currentConfig map[str
 	pairs := [][2]string{{"llm_provider", "LLM 提供商变化"}, {"llm_model", "模型变化"}, {"max_steps", "最大步数变化"}}
 	for _, pair := range pairs {
 		k := pair[0]
-		before := fmt.Sprintf("%v", savedConfig[k])
-		after := fmt.Sprintf("%v", currentConfig[k])
-		if before != after {
+		before := savedConfig[k]
+		after := currentConfig[k]
+		if !pythonValueEqual(before, after) {
 			warnings = append(warnings, fmt.Sprintf("%s: %s → %s", pair[1], before, after))
 		}
 	}
@@ -182,5 +193,66 @@ func (s *SessionStore) CheckToolSchemaConsistency(savedHash, currentHash string)
 		"saved_hash":     savedHash,
 		"current_hash":   currentHash,
 		"recommendation": recommendation,
+	}
+}
+
+func pythonValueEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+
+	if af, aok := numericValue(a); aok {
+		if bf, bok := numericValue(b); bok {
+			return af == bf
+		}
+	}
+
+	if as, aok := a.(string); aok {
+		bs, bok := b.(string)
+		return bok && as == bs
+	}
+
+	if ab, aok := a.(bool); aok {
+		if bb, bok := b.(bool); bok {
+			return ab == bb
+		}
+	}
+
+	return reflect.DeepEqual(a, b)
+}
+
+func numericValue(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	case bool:
+		if n {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
 	}
 }

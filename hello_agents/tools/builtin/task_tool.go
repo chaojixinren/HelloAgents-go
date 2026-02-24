@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,26 +62,37 @@ func (t *TaskTool) GetParameters() []tools.ToolParameter {
 	return t.BaseTool.GetParameters()
 }
 
-func (t *TaskTool) Run(parameters map[string]any) tools.ToolResponse {
-	start := time.Now()
-	task := strings.TrimSpace(fmt.Sprintf("%v", parameters["task"]))
-	agentType := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", parameters["agent_type"])))
-	toolFilterType := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", parameters["tool_filter"])))
+func (t *TaskTool) Run(parameters map[string]any) (response tools.ToolResponse) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			response = tools.Error(
+				fmt.Sprintf("子代理执行失败: %v", recovered),
+				tools.ToolErrorCodeExecutionError,
+				nil,
+			)
+		}
+	}()
 
-	if task == "" || task == "<nil>" {
+	start := time.Now()
+	task, _ := parameters["task"].(string)
+	agentType := "react"
+	if raw, exists := parameters["agent_type"]; exists {
+		agentType, _ = raw.(string)
+	}
+	toolFilterType := "none"
+	if raw, exists := parameters["tool_filter"]; exists {
+		toolFilterType, _ = raw.(string)
+	}
+
+	if task == "" {
 		return tools.Error("参数 'task' 不能为空", tools.ToolErrorCodeInvalidParam, nil)
 	}
-	if agentType == "" || agentType == "<nil>" {
-		agentType = "react"
-	}
-	if toolFilterType == "" || toolFilterType == "<nil>" {
-		toolFilterType = "none"
-	}
+	agentType = strings.ToLower(agentType)
+	toolFilterType = strings.ToLower(toolFilterType)
 
 	var maxSteps *int
-	if raw, ok := parameters["max_steps"]; ok {
-		v := intFromAny(raw)
-		if v > 0 {
+	if raw, ok := parameters["max_steps"]; ok && raw != nil {
+		if v, parsed := parseOptionalInt(raw); parsed {
 			maxSteps = &v
 		}
 	}
@@ -137,5 +149,33 @@ func (t *TaskTool) createToolFilter(filterType string) tools.ToolFilter {
 		return tools.NewFullAccessFilter(nil)
 	default:
 		return nil
+	}
+}
+
+func parseOptionalInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return 1, true
+		}
+		return 0, true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case int32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
 	}
 }

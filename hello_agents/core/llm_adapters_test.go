@@ -1,0 +1,148 @@
+package core
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestConvertAnthropicMessagesPreservesNonSystemMessageFields(t *testing.T) {
+	system, converted := convertAnthropicMessages([]map[string]any{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "hello", "extra": 123},
+		{"role": "assistant", "content": map[string]any{"type": "text", "text": "ok"}},
+	})
+
+	if system != "sys" {
+		t.Fatalf("system = %q, want %q", system, "sys")
+	}
+	if len(converted) != 2 {
+		t.Fatalf("len(converted) = %d, want 2", len(converted))
+	}
+	if converted[0]["extra"] != 123 {
+		t.Fatalf("converted[0].extra = %v, want 123", converted[0]["extra"])
+	}
+	if _, ok := converted[1]["content"].(map[string]any); !ok {
+		t.Fatalf("converted[1].content type = %T, want map[string]any", converted[1]["content"])
+	}
+}
+
+func TestOpenAIInvokeUsesConfiguredModelLikePython(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model":"server-side-model",
+			"choices":[{"message":{"content":"hello"}}],
+			"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+		}`))
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{adapterBase: adapterBase{
+		APIKey:  "k",
+		BaseURL: server.URL + "/v1",
+		Timeout: 5,
+		Model:   "configured-model",
+	}}
+
+	resp, err := adapter.Invoke([]map[string]any{
+		{"role": "user", "content": "hi"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if resp.Model != "configured-model" {
+		t.Fatalf("resp.Model = %q, want %q", resp.Model, "configured-model")
+	}
+	if resp.Content != "hello" {
+		t.Fatalf("resp.Content = %q, want %q", resp.Content, "hello")
+	}
+}
+
+func TestAnthropicStreamAvoidsDuplicateDeltaAndContentBlockText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		_, _ = fmt.Fprint(w, "data: {\"delta\":{\"text\":\"A\"},\"content_block\":{\"text\":\"A\"}}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	adapter := &AnthropicAdapter{adapterBase: adapterBase{
+		APIKey:  "k",
+		BaseURL: server.URL + "/v1",
+		Timeout: 5,
+		Model:   "claude-test",
+	}}
+
+	out, errCh := adapter.StreamInvoke([]map[string]any{
+		{"role": "user", "content": "hi"},
+	}, nil)
+
+	chunks := make([]string, 0)
+	for chunk := range out {
+		chunks = append(chunks, chunk)
+	}
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("StreamInvoke() error = %v", err)
+		}
+	}
+
+	if len(chunks) != 1 || chunks[0] != "A" {
+		t.Fatalf("chunks = %#v, want [\"A\"]", chunks)
+	}
+}
+
+func TestGeminiStreamReturnsErrorWithoutInvokeFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	adapter := &GeminiAdapter{adapterBase: adapterBase{
+		APIKey:  "k",
+		BaseURL: server.URL + "/v1beta",
+		Timeout: 5,
+		Model:   "gemini-test",
+	}}
+
+	out, errCh := adapter.StreamInvoke([]map[string]any{
+		{"role": "user", "content": "hi"},
+	}, nil)
+
+	gotChunks := 0
+	for range out {
+		gotChunks++
+	}
+
+	var gotErr error
+	for err := range errCh {
+		if err != nil {
+			gotErr = err
+		}
+	}
+
+	if gotChunks != 0 {
+		t.Fatalf("gotChunks = %d, want 0 when stream endpoint fails", gotChunks)
+	}
+	if gotErr == nil {
+		t.Fatalf("expected stream error, got nil")
+	}
+}

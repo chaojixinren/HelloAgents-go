@@ -2,7 +2,6 @@ package agents
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"helloagents-go/hello_agents/core"
@@ -34,9 +33,6 @@ func NewSimpleAgentWithOptions(
 	if err != nil {
 		return nil, err
 	}
-	if maxToolIterations <= 0 {
-		maxToolIterations = 3
-	}
 	agent := &SimpleAgent{
 		BaseAgent:         base,
 		EnableToolCalling: enableToolCalling && toolRegistry != nil,
@@ -55,14 +51,7 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 	startTime := time.Now()
 
 	maxToolIterations := a.MaxToolIterations
-	if raw, ok := kwargs["max_tool_iterations"]; ok {
-		maxToolIterations = intFromAny(raw)
-	}
-	if maxToolIterations <= 0 {
-		maxToolIterations = 3
-	}
-
-	llmKwargs := cloneMapWithoutKeys(kwargs, "max_tool_iterations")
+	llmKwargs := cloneMapWithoutKeys(kwargs)
 	messages := a.buildMessages(inputText)
 
 	var traceLogger *observability.TraceLogger
@@ -141,7 +130,7 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 			}, &step)
 		}
 		if len(toolCalls) == 0 {
-			if strings.TrimSpace(content) == "" {
+			if content == "" {
 				finalResponse = "抱歉，我无法回答这个问题。"
 			} else {
 				finalResponse = content
@@ -219,7 +208,7 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 
 func (a *SimpleAgent) buildMessages(inputText string) []map[string]any {
 	messages := make([]map[string]any, 0, len(a.GetHistory())+2)
-	if strings.TrimSpace(a.SystemPrompt) != "" {
+	if a.SystemPrompt != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": a.SystemPrompt})
 	}
 	for _, msg := range a.GetHistory() {
@@ -312,7 +301,7 @@ func (a *SimpleAgent) ArunStream(inputText string, kwargs map[string]any, hooks 
 		})
 
 		messages := []map[string]any{}
-		if strings.TrimSpace(a.SystemPrompt) != "" {
+		if a.SystemPrompt != "" {
 			messages = append(messages, map[string]any{"role": "system", "content": a.SystemPrompt})
 		}
 		for _, msg := range a.GetHistory() {

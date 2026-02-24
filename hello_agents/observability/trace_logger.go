@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -32,23 +33,9 @@ type TraceLogger struct {
 
 func NewTraceLogger(outputDir string, sanitize, htmlIncludeRawResponse bool) (*TraceLogger, error) {
 	if outputDir == "" {
-		outputDir = "memory/traces"
+		outputDir = "."
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return nil, err
-	}
-
-	sessionID := generateSessionID()
-	jsonlPath := filepath.Join(outputDir, fmt.Sprintf("trace-%s.jsonl", sessionID))
-	htmlPath := filepath.Join(outputDir, fmt.Sprintf("trace-%s.html", sessionID))
-
-	jsonlFile, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	htmlFile, err := os.OpenFile(htmlPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		_ = jsonlFile.Close()
 		return nil, err
 	}
 
@@ -56,13 +43,25 @@ func NewTraceLogger(outputDir string, sanitize, htmlIncludeRawResponse bool) (*T
 		OutputDir:      outputDir,
 		Sanitize:       sanitize,
 		HTMLIncludeRaw: htmlIncludeRawResponse,
-		SessionID:      sessionID,
-		JSONLPath:      jsonlPath,
-		HTMLPath:       htmlPath,
 		events:         make([]map[string]any, 0, 128),
-		jsonlFile:      jsonlFile,
-		htmlFile:       htmlFile,
 	}
+	l.SessionID = l.generateSessionID()
+	l.JSONLPath = filepath.Join(outputDir, fmt.Sprintf("trace-%s.jsonl", l.SessionID))
+	l.HTMLPath = filepath.Join(outputDir, fmt.Sprintf("trace-%s.html", l.SessionID))
+
+	jsonlFile, err := os.OpenFile(l.JSONLPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	htmlFile, err := os.OpenFile(l.HTMLPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = jsonlFile.Close()
+		return nil, err
+	}
+
+	l.jsonlFile = jsonlFile
+	l.htmlFile = htmlFile
+
 	if err := l.writeHTMLHeader(); err != nil {
 		_ = l.jsonlFile.Close()
 		_ = l.htmlFile.Close()
@@ -71,10 +70,13 @@ func NewTraceLogger(outputDir string, sanitize, htmlIncludeRawResponse bool) (*T
 	return l, nil
 }
 
-func generateSessionID() string {
+func (l *TraceLogger) generateSessionID() string {
 	now := time.Now().Format("20060102-150405")
-	rand := fmt.Sprintf("%04x", time.Now().UnixNano()&0xffff)
-	return fmt.Sprintf("s-%s-%s", now, rand)
+	suffixBytes := make([]byte, 2)
+	if _, err := rand.Read(suffixBytes); err != nil {
+		return fmt.Sprintf("s-%s-%04x", now, time.Now().UnixNano()&0xffff)
+	}
+	return fmt.Sprintf("s-%s-%02x%02x", now, suffixBytes[0], suffixBytes[1])
 }
 
 func (l *TraceLogger) LogEvent(event string, payload map[string]any, step *int) {
@@ -88,7 +90,7 @@ func (l *TraceLogger) LogEvent(event string, payload map[string]any, step *int) 
 	}
 
 	eventObj := map[string]any{
-		"ts":         time.Now().Format(time.RFC3339Nano),
+		"ts":         nowPythonISOTime(),
 		"session_id": l.SessionID,
 		"step":       nil,
 		"event":      event,
@@ -114,11 +116,11 @@ func (l *TraceLogger) sanitizeEvent(event map[string]any) map[string]any {
 	if !ok {
 		return event
 	}
-	deepCopy["payload"] = sanitizeValue(deepCopy["payload"])
+	deepCopy["payload"] = l.sanitizeValue(deepCopy["payload"])
 	return deepCopy
 }
 
-func sanitizeValue(value any) any {
+func (l *TraceLogger) sanitizeValue(value any) any {
 	switch v := value.(type) {
 	case string:
 		apiKeyRE := regexp.MustCompile(`sk-[a-zA-Z0-9]+`)
@@ -132,13 +134,25 @@ func sanitizeValue(value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for k, vv := range v {
-			out[k] = sanitizeValue(vv)
+			out[k] = l.sanitizeValue(vv)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, vv := range v {
+			out[k] = l.sanitizeValue(vv).(string)
 		}
 		return out
 	case []any:
 		out := make([]any, 0, len(v))
 		for _, item := range v {
-			out = append(out, sanitizeValue(item))
+			out = append(out, l.sanitizeValue(item))
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, l.sanitizeValue(item).(string))
 		}
 		return out
 	default:
@@ -178,6 +192,7 @@ func (l *TraceLogger) Finalize() error {
 	}
 
 	l.closed = true
+	fmt.Printf("✅ Trace 已保存:\n   JSONL: %s\n   HTML:  %s\n", l.JSONLPath, l.HTMLPath)
 	return nil
 }
 
@@ -199,7 +214,7 @@ func (l *TraceLogger) computeStats() map[string]any {
 		eventType, _ := event["event"].(string)
 
 		if tsStr, ok := event["ts"].(string); ok {
-			ts, err := time.Parse(time.RFC3339Nano, tsStr)
+			ts, err := parseTraceTimestamp(tsStr)
 			if err == nil {
 				if eventType == "session_start" {
 					sessionStart = ts
@@ -210,8 +225,8 @@ func (l *TraceLogger) computeStats() map[string]any {
 			}
 		}
 
-		if step, ok := event["step"].(float64); ok {
-			current := int(step)
+		if rawStep, exists := event["step"]; exists && rawStep != nil {
+			current := intFromAny(rawStep)
 			if current > stats["total_steps"].(int) {
 				stats["total_steps"] = current
 			}
@@ -220,21 +235,19 @@ func (l *TraceLogger) computeStats() map[string]any {
 		payload, _ := event["payload"].(map[string]any)
 		if eventType == "model_output" && payload != nil {
 			if usage, ok := payload["usage"].(map[string]any); ok {
-				if totalTokens, ok := usage["total_tokens"].(float64); ok {
-					stats["total_tokens"] = stats["total_tokens"].(int) + int(totalTokens)
-				}
-				if cost, ok := usage["cost"].(float64); ok {
-					stats["total_cost"] = stats["total_cost"].(float64) + cost
-				}
+				stats["total_tokens"] = stats["total_tokens"].(int) + intFromAny(usage["total_tokens"])
+				stats["total_cost"] = stats["total_cost"].(float64) + floatFromAny(usage["cost"])
 			}
 			stats["model_calls"] = stats["model_calls"].(int) + 1
 		}
 
 		if eventType == "tool_call" && payload != nil {
-			if toolName, ok := payload["tool_name"].(string); ok && toolName != "" {
-				calls := stats["tool_calls"].(map[string]int)
-				calls[toolName]++
+			toolName := "unknown"
+			if name, ok := payload["tool_name"].(string); ok {
+				toolName = name
 			}
+			calls := stats["tool_calls"].(map[string]int)
+			calls[toolName]++
 		}
 
 		if eventType == "error" && payload != nil {
@@ -254,6 +267,89 @@ func (l *TraceLogger) computeStats() map[string]any {
 	}
 
 	return stats
+}
+
+func intFromAny(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case int32:
+		return int(v)
+	case int16:
+		return int(v)
+	case int8:
+		return int(v)
+	case uint:
+		return int(v)
+	case uint64:
+		return int(v)
+	case uint32:
+		return int(v)
+	case uint16:
+		return int(v)
+	case uint8:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func floatFromAny(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case int16:
+		return float64(v)
+	case int8:
+		return float64(v)
+	case uint:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case uint32:
+		return float64(v)
+	case uint16:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func nowPythonISOTime() string {
+	return time.Now().Format("2006-01-02T15:04:05.999999")
+}
+
+func parseTraceTimestamp(value string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.999999",
+		"2006-01-02T15:04:05",
+	}
+	var lastErr error
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, lastErr
 }
 
 func (l *TraceLogger) writeHTMLHeader() error {
@@ -281,7 +377,7 @@ func (l *TraceLogger) writeHTMLHeader() error {
     <div>generated_at: %s</div>
   </div>
   <div class="panel" id="stats-panel"><h2>Stats</h2><div>pending finalize...</div></div>
-  <div class="panel"><h2>Events</h2><div class="events" id="events">`, l.SessionID, l.SessionID, time.Now().Format(time.RFC3339Nano))
+  <div class="panel"><h2>Events</h2><div class="events" id="events">`, l.SessionID, l.SessionID, time.Now().Format("2006-01-02 15:04:05"))
 
 	_, err := l.htmlFile.WriteString(head)
 	return err

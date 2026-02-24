@@ -2,30 +2,40 @@ package context
 
 import "sync"
 
+import tiktoken "github.com/pkoukk/tiktoken-go"
+
 // TokenCounter is a lightweight estimator with caching.
 type TokenCounter[T any] struct {
 	Model           string
 	messageToTextFn func(T) string
 	messageToKeyFn  func(T) string
+	encoding        *tiktoken.Tiktoken
 
 	mu        sync.RWMutex
 	textCache map[string]int
 }
 
 func NewTokenCounter[T any](model string, messageToTextFn func(T) string, messageToKeyFn func(T) string) *TokenCounter[T] {
-	if model == "" {
-		model = "gpt-4"
-	}
 	if messageToTextFn == nil {
 		messageToTextFn = func(_ T) string { return "" }
 	}
 	if messageToKeyFn == nil {
 		messageToKeyFn = func(item T) string { return messageToTextFn(item) }
 	}
+
+	encoding, err := tiktoken.EncodingForModel(model)
+	if err != nil {
+		encoding, err = tiktoken.GetEncoding("cl100k_base")
+		if err != nil {
+			encoding = nil
+		}
+	}
+
 	return &TokenCounter[T]{
 		Model:           model,
 		messageToTextFn: messageToTextFn,
 		messageToKeyFn:  messageToKeyFn,
+		encoding:        encoding,
 		textCache:       map[string]int{},
 	}
 }
@@ -62,6 +72,9 @@ func (c *TokenCounter[T]) CountText(text string) int {
 }
 
 func (c *TokenCounter[T]) _countText(text string) int {
+	if c.encoding != nil {
+		return len(c.encoding.Encode(text, nil, nil))
+	}
 	// Fallback estimate: one token ~= 4 chars.
 	return len([]rune(text)) / 4
 }

@@ -32,11 +32,7 @@ type adapterBase struct {
 func (a *adapterBase) LastStats() *StreamStats { return a.stats }
 
 func (a *adapterBase) httpClient() *http.Client {
-	timeout := a.Timeout
-	if timeout <= 0 {
-		timeout = 60
-	}
-	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	return &http.Client{Timeout: time.Duration(a.Timeout) * time.Second}
 }
 
 func (a *adapterBase) isThinkingModel() bool {
@@ -402,14 +398,9 @@ func (a *OpenAIAdapter) Invoke(messages []map[string]any, kwargs map[string]any)
 		}
 	}
 
-	actualModel := a.Model
-	if m := asString(respMap["model"]); m != "" {
-		actualModel = m
-	}
-
 	return LLMResponse{
 		Content:          content,
-		Model:            actualModel,
+		Model:            a.Model,
 		Usage:            usageFromOpenAIMap(respMap),
 		LatencyMS:        int(time.Since(start).Milliseconds()),
 		ReasoningContent: reasoning,
@@ -536,10 +527,7 @@ func convertAnthropicMessages(messages []map[string]any) (string, []map[string]a
 			system = asString(msg["content"])
 			continue
 		}
-		converted = append(converted, map[string]any{
-			"role":    role,
-			"content": asString(msg["content"]),
-		})
+		converted = append(converted, copyMap(msg))
 	}
 	return system, converted
 }
@@ -635,14 +623,18 @@ func (a *AnthropicAdapter) StreamInvoke(messages []map[string]any, kwargs map[st
 			if err != nil {
 				return nil
 			}
+			emitted := false
 			if delta := asMap(eventMap["delta"]); delta != nil {
 				if text := asString(delta["text"]); text != "" {
 					out <- text
+					emitted = true
 				}
 			}
-			if contentBlock := asMap(eventMap["content_block"]); contentBlock != nil {
-				if text := asString(contentBlock["text"]); text != "" {
-					out <- text
+			if !emitted {
+				if contentBlock := asMap(eventMap["content_block"]); contentBlock != nil {
+					if text := asString(contentBlock["text"]); text != "" {
+						out <- text
+					}
 				}
 			}
 			if usageMap := asMap(eventMap["usage"]); usageMap != nil {
@@ -689,12 +681,12 @@ func (a *AnthropicAdapter) InvokeWithTools(messages []map[string]any, tools []ma
 	return toJSONMap(respBody)
 }
 
-func convertGeminiMessages(messages []map[string]any) (string, []map[string]any) {
-	systemInstruction := ""
+func convertGeminiMessages(messages []map[string]any) (any, []map[string]any) {
+	var systemInstruction any
 	converted := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
 		role := asString(msg["role"])
-		content := asString(msg["content"])
+		content := msg["content"]
 		if role == "system" {
 			systemInstruction = content
 			continue
@@ -755,7 +747,7 @@ func (a *GeminiAdapter) Invoke(messages []map[string]any, kwargs map[string]any)
 	if len(generationConfig) > 0 {
 		body["generationConfig"] = generationConfig
 	}
-	if systemInstruction != "" {
+	if pythonTruthy(systemInstruction) {
 		body["systemInstruction"] = map[string]any{"parts": []map[string]any{{"text": systemInstruction}}}
 	}
 	body = mergeMap(body, kw)
@@ -802,7 +794,7 @@ func (a *GeminiAdapter) StreamInvoke(messages []map[string]any, kwargs map[strin
 		if len(generationConfig) > 0 {
 			body["generationConfig"] = generationConfig
 		}
-		if systemInstruction != "" {
+		if pythonTruthy(systemInstruction) {
 			body["systemInstruction"] = map[string]any{"parts": []map[string]any{{"text": systemInstruction}}}
 		}
 		body = mergeMap(body, kw)
@@ -821,28 +813,14 @@ func (a *GeminiAdapter) StreamInvoke(messages []map[string]any, kwargs map[strin
 
 		start := time.Now()
 		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			// Fallback: Gemini SSE endpoint availability may vary by host/proxy.
-			fallbackResp, invokeErr := a.Invoke(messages, kwargs)
-			if invokeErr != nil {
-				if err != nil {
-					errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: %v", err))
-				} else {
-					data, _ := io.ReadAll(resp.Body)
-					errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: http %d: %s", resp.StatusCode, string(data)))
-				}
-				if resp != nil {
-					_ = resp.Body.Close()
-				}
-				return
-			}
-			if fallbackResp.Content != "" {
-				out <- fallbackResp.Content
-			}
-			a.stats = &StreamStats{Model: a.Model, Usage: fallbackResp.Usage, LatencyMS: int(time.Since(start).Milliseconds())}
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
+		if err != nil {
+			errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: %v", err))
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			data, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: http %d: %s", resp.StatusCode, string(data)))
 			return
 		}
 		defer resp.Body.Close()
@@ -894,7 +872,7 @@ func (a *GeminiAdapter) InvokeWithTools(messages []map[string]any, tools []map[s
 	if len(generationConfig) > 0 {
 		body["generationConfig"] = generationConfig
 	}
-	if systemInstruction != "" {
+	if pythonTruthy(systemInstruction) {
 		body["systemInstruction"] = map[string]any{"parts": []map[string]any{{"text": systemInstruction}}}
 	}
 	if geminiTools := convertGeminiTools(tools); len(geminiTools) > 0 {
@@ -913,10 +891,10 @@ func (a *GeminiAdapter) InvokeWithTools(messages []map[string]any, tools []map[s
 func CreateAdapter(apiKey, baseURL string, timeout int, model string) BaseLLMAdapter {
 	base := adapterBase{APIKey: apiKey, BaseURL: baseURL, Timeout: timeout, Model: model}
 	urlLower := strings.ToLower(baseURL)
-	if strings.Contains(urlLower, "anthropic.com") || strings.Contains(urlLower, "anthropic") {
+	if strings.Contains(urlLower, "anthropic.com") {
 		return &AnthropicAdapter{adapterBase: base}
 	}
-	if strings.Contains(urlLower, "googleapis.com") || strings.Contains(urlLower, "generativelanguage") || strings.Contains(urlLower, "gemini") {
+	if strings.Contains(urlLower, "googleapis.com") || strings.Contains(urlLower, "generativelanguage") {
 		return &GeminiAdapter{adapterBase: base}
 	}
 	// OpenAI-compatible adapters are the default.

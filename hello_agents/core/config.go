@@ -176,10 +176,36 @@ func FromEnv() Config {
 
 	cfg := DefaultConfig()
 
-	cfg.Debug = getEnvBool("DEBUG", cfg.Debug)
-	cfg.LogLevel = getEnvString("LOG_LEVEL", cfg.LogLevel)
-	cfg.Temperature = getEnvFloat("TEMPERATURE", cfg.Temperature)
-	cfg.MaxTokens = getEnvOptionalInt("MAX_TOKENS")
+	// Python parity:
+	// debug=os.getenv("DEBUG", "false").lower() == "true"
+	cfg.Debug = strings.ToLower(os.Getenv("DEBUG")) == "true"
+	logLevelRaw, hasLogLevel := os.LookupEnv("LOG_LEVEL")
+	if hasLogLevel {
+		cfg.LogLevel = logLevelRaw
+	} else {
+		cfg.LogLevel = "INFO"
+	}
+
+	temperatureRaw, hasTemperature := os.LookupEnv("TEMPERATURE")
+	if !hasTemperature {
+		temperatureRaw = "0.7"
+	}
+	temperatureValue, err := strconv.ParseFloat(temperatureRaw, 64)
+	if err != nil {
+		panic(err)
+	}
+	cfg.Temperature = temperatureValue
+
+	maxTokensRaw, hasMaxTokens := os.LookupEnv("MAX_TOKENS")
+	if hasMaxTokens && maxTokensRaw != "" {
+		maxTokensValue, err := strconv.Atoi(maxTokensRaw)
+		if err != nil {
+			panic(err)
+		}
+		cfg.MaxTokens = &maxTokensValue
+	} else {
+		cfg.MaxTokens = nil
+	}
 
 	return cfg
 }
@@ -279,51 +305,4 @@ func LoadDotEnv(path string) error {
 	}
 
 	return scanner.Err()
-}
-
-func getEnvString(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok && strings.TrimSpace(v) != "" {
-		return v
-	}
-	return fallback
-}
-
-func getEnvBool(key string, fallback bool) bool {
-	if v, ok := os.LookupEnv(key); ok {
-		parsed, err := strconv.ParseBool(strings.ToLower(strings.TrimSpace(v)))
-		if err == nil {
-			return parsed
-		}
-	}
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if v, ok := os.LookupEnv(key); ok {
-		parsed, err := strconv.Atoi(strings.TrimSpace(v))
-		if err == nil {
-			return parsed
-		}
-	}
-	return fallback
-}
-
-func getEnvOptionalInt(key string) *int {
-	if v, ok := os.LookupEnv(key); ok && strings.TrimSpace(v) != "" {
-		parsed, err := strconv.Atoi(strings.TrimSpace(v))
-		if err == nil {
-			return &parsed
-		}
-	}
-	return nil
-}
-
-func getEnvFloat(key string, fallback float64) float64 {
-	if v, ok := os.LookupEnv(key); ok {
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err == nil {
-			return parsed
-		}
-	}
-	return fallback
 }

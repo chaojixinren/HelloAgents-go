@@ -39,12 +39,14 @@ func NewHelloAgentsLLM(model, apiKey, baseURL string, temperature float64, maxTo
 	}
 
 	timeoutValue := 60
-	if timeout != nil {
+	if timeout != nil && *timeout != 0 {
 		timeoutValue = *timeout
 	} else if s := os.Getenv("LLM_TIMEOUT"); s != "" {
-		if parsed, err := strconv.Atoi(s); err == nil {
-			timeoutValue = parsed
+		parsed, err := strconv.Atoi(s)
+		if err != nil {
+			panic(err)
 		}
+		timeoutValue = parsed
 	}
 
 	if model == "" {
@@ -60,6 +62,9 @@ func NewHelloAgentsLLM(model, apiKey, baseURL string, temperature float64, maxTo
 	provider := ""
 	if v, ok := kwargs["provider"].(string); ok {
 		provider = v
+	}
+	if maxTokens != nil && *maxTokens == 0 {
+		maxTokens = nil
 	}
 
 	llm := &HelloAgentsLLM{
@@ -90,18 +95,16 @@ func (l *HelloAgentsLLM) Think(messages []map[string]any, temperature *float64) 
 }
 
 func (l *HelloAgentsLLM) Invoke(messages []map[string]any, kwargs map[string]any) (LLMResponse, error) {
-	if kwargs == nil {
-		kwargs = map[string]any{}
-	}
-	if _, ok := kwargs["temperature"]; !ok {
-		kwargs["temperature"] = l.Temperature
+	callKwargs := copyMap(kwargs)
+	if _, ok := callKwargs["temperature"]; !ok {
+		callKwargs["temperature"] = l.Temperature
 	}
 	if l.MaxTokens != nil {
-		if _, ok := kwargs["max_tokens"]; !ok {
-			kwargs["max_tokens"] = *l.MaxTokens
+		if _, ok := callKwargs["max_tokens"]; !ok {
+			callKwargs["max_tokens"] = *l.MaxTokens
 		}
 	}
-	resp, err := l.adapter.Invoke(messages, kwargs)
+	resp, err := l.adapter.Invoke(messages, callKwargs)
 	if err != nil {
 		return LLMResponse{}, WrapError("llm invoke failed", err)
 	}
@@ -109,19 +112,32 @@ func (l *HelloAgentsLLM) Invoke(messages []map[string]any, kwargs map[string]any
 }
 
 func (l *HelloAgentsLLM) StreamInvoke(messages []map[string]any, kwargs map[string]any) (<-chan string, <-chan error) {
-	if kwargs == nil {
-		kwargs = map[string]any{}
-	}
-	if _, ok := kwargs["temperature"]; !ok {
-		kwargs["temperature"] = l.Temperature
-	}
-	if l.MaxTokens != nil {
-		if _, ok := kwargs["max_tokens"]; !ok {
-			kwargs["max_tokens"] = *l.MaxTokens
-		}
+	callKwargs := copyMap(kwargs)
+
+	temperature, hasTemperature := callKwargs["temperature"]
+	if hasTemperature {
+		delete(callKwargs, "temperature")
+	} else {
+		temperature = nil
 	}
 
-	innerStream, innerErr := l.adapter.StreamInvoke(messages, kwargs)
+	adapterKwargs := map[string]any{
+		"temperature": temperature,
+	}
+
+	if l.MaxTokens != nil {
+		if maxTokens, ok := callKwargs["max_tokens"]; ok {
+			adapterKwargs["max_tokens"] = maxTokens
+			delete(callKwargs, "max_tokens")
+		} else {
+			adapterKwargs["max_tokens"] = *l.MaxTokens
+		}
+	}
+	for k, v := range callKwargs {
+		adapterKwargs[k] = v
+	}
+
+	innerStream, innerErr := l.adapter.StreamInvoke(messages, adapterKwargs)
 	out := make(chan string)
 	errOut := make(chan error, 1)
 
@@ -149,19 +165,20 @@ func (l *HelloAgentsLLM) StreamInvoke(messages []map[string]any, kwargs map[stri
 }
 
 func (l *HelloAgentsLLM) InvokeWithTools(messages []map[string]any, tools []map[string]any, toolChoice any, kwargs map[string]any) (map[string]any, error) {
-	if kwargs == nil {
-		kwargs = map[string]any{}
+	callKwargs := map[string]any{
+		"temperature": l.Temperature,
+		"tool_choice": toolChoice,
 	}
-	kwargs["tool_choice"] = toolChoice
-	if _, ok := kwargs["temperature"]; !ok {
-		kwargs["temperature"] = l.Temperature
+	for k, v := range copyMap(kwargs) {
+		callKwargs[k] = v
 	}
+
 	if l.MaxTokens != nil {
-		if _, ok := kwargs["max_tokens"]; !ok {
-			kwargs["max_tokens"] = *l.MaxTokens
+		if _, ok := callKwargs["max_tokens"]; !ok {
+			callKwargs["max_tokens"] = *l.MaxTokens
 		}
 	}
-	return l.adapter.InvokeWithTools(messages, tools, kwargs)
+	return l.adapter.InvokeWithTools(messages, tools, callKwargs)
 }
 
 func (l *HelloAgentsLLM) AInvoke(messages []map[string]any, kwargs map[string]any) (LLMResponse, error) {

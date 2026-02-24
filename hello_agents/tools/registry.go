@@ -87,15 +87,15 @@ func (r *ToolRegistry) RegisterTool(tool Tool, autoExpandArgs ...bool) {
 // 1) RegisterFunction(handler, name?, description?)
 // 2) RegisterFunction(name, description, handler)
 func (r *ToolRegistry) RegisterFunction(funcOrName any, args ...any) {
-	name, description, handler := parseFunctionRegistration(funcOrName, args...)
-	if name == "" || handler == nil {
+	name, description, handler, hasDescription := parseFunctionRegistration(funcOrName, args...)
+	if handler == nil {
 		return
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if description == "" {
+	if !hasDescription {
 		description = "执行 " + name
 	}
 	if _, exists := r.functions[name]; !exists {
@@ -107,10 +107,17 @@ func (r *ToolRegistry) RegisterFunction(funcOrName any, args ...any) {
 func (r *ToolRegistry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.tools, name)
-	delete(r.functions, name)
-	r.toolOrder = removeName(r.toolOrder, name)
-	r.funcOrder = removeName(r.funcOrder, name)
+
+	if _, exists := r.tools[name]; exists {
+		delete(r.tools, name)
+		r.toolOrder = removeName(r.toolOrder, name)
+		return
+	}
+
+	if _, exists := r.functions[name]; exists {
+		delete(r.functions, name)
+		r.funcOrder = removeName(r.funcOrder, name)
+	}
 }
 
 // DisableTool mirrors Python subagent filtering behavior:
@@ -151,6 +158,18 @@ func (r *ToolRegistry) GetAllFunctions() map[string]FunctionTool {
 	return out
 }
 
+func (r *ToolRegistry) ListFunctions() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.funcOrder))
+	for _, name := range r.funcOrder {
+		if _, ok := r.functions[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func (r *ToolRegistry) ExecuteTool(name string, inputText string) ToolResponse {
 	if r.CircuitBreaker != nil && r.CircuitBreaker.IsOpen(name) {
 		status := r.CircuitBreaker.GetStatus(name)
@@ -174,31 +193,57 @@ func (r *ToolRegistry) ExecuteTool(name string, inputText string) ToolResponse {
 
 	if tool != nil {
 		parameters := map[string]any{"input": inputText}
-		trimmed := strings.TrimSpace(inputText)
-		if strings.HasPrefix(trimmed, "{") {
-			var parsed map[string]any
-			if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
-				parameters = parsed
+		if parsedParams, parsed, parseErr := parseToolParameters(inputText); parseErr != nil {
+			response = Error(
+				fmt.Sprintf("执行工具 '%s' 时发生异常: %v", name, parseErr),
+				ToolErrorCodeExecutionError,
+				map[string]any{"tool_name": name, "input": inputText},
+			)
+			if r.CircuitBreaker != nil {
+				r.CircuitBreaker.RecordResult(name, response)
 			}
+			return response
+		} else if parsed {
+			parameters = parsedParams
 		}
-		response = tool.RunWithTiming(parameters)
-	} else if hasFn {
-		start := time.Now()
-		result := any(nil)
+
+		var recovered any
 		func() {
 			defer func() {
 				if p := recover(); p != nil {
-					response = Error(
-						fmt.Sprintf("函数执行失败: %v", p),
-						ToolErrorCodeExecutionError,
-						map[string]any{"tool_name": name, "input": inputText},
-					)
+					recovered = p
+				}
+			}()
+			response = tool.RunWithTiming(parameters)
+		}()
+
+		if recovered != nil {
+			response = Error(
+				fmt.Sprintf("执行工具 '%s' 时发生异常: %v", name, recovered),
+				ToolErrorCodeExecutionError,
+				map[string]any{"tool_name": name, "input": inputText},
+			)
+		}
+	} else if hasFn {
+		start := time.Now()
+		result := any(nil)
+		var recovered any
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					recovered = p
 				}
 			}()
 			result = fnInfo.Handler(inputText)
 		}()
 
-		if response.Status == "" {
+		if recovered != nil {
+			response = Error(
+				fmt.Sprintf("函数执行失败: %v", recovered),
+				ToolErrorCodeExecutionError,
+				map[string]any{"tool_name": name, "input": inputText},
+			)
+		} else {
 			response = Success(
 				fmt.Sprintf("%v", result),
 				map[string]any{"output": result},
@@ -206,6 +251,7 @@ func (r *ToolRegistry) ExecuteTool(name string, inputText string) ToolResponse {
 				nil,
 			)
 		}
+
 		if response.Stats == nil {
 			response.Stats = map[string]any{}
 		}
@@ -289,7 +335,9 @@ func (r *ToolRegistry) Clear() {
 	r.functions = map[string]FunctionTool{}
 	r.toolOrder = []string{}
 	r.funcOrder = []string{}
-	r.readMetadataCache = map[string]map[string]any{}
+	if r.readMetadataCache == nil {
+		r.readMetadataCache = map[string]map[string]any{}
+	}
 }
 
 func (r *ToolRegistry) CacheReadMetadata(filePath string, metadata map[string]any) {
@@ -326,44 +374,41 @@ func (r *ToolRegistry) ReadMetadataCache() map[string]map[string]any {
 
 var GlobalRegistry = NewToolRegistry(nil)
 
-func parseFunctionRegistration(funcOrName any, args ...any) (string, string, func(input string) any) {
+func parseFunctionRegistration(funcOrName any, args ...any) (string, string, func(input string) any, bool) {
 	// Legacy style: register_function(name, description, func)
 	if name, ok := funcOrName.(string); ok {
-		if strings.TrimSpace(name) == "" || len(args) < 2 {
-			return "", "", nil
+		if len(args) < 2 {
+			return "", "", nil, false
 		}
-		// Backward compatibility for previous Go scaffold:
-		// register_function(name, handler, description)
-		if handler := coerceFunctionHandler(args[0]); handler != nil {
-			description, _ := args[1].(string)
-			return name, description, handler
-		}
-
 		description, _ := args[0].(string)
 		handler := coerceFunctionHandler(args[1])
-		return name, description, handler
+		return name, description, handler, true
 	}
 
 	// Modern style: register_function(func, name=None, description=None)
 	handler := coerceFunctionHandler(funcOrName)
 	if handler == nil {
-		return "", "", nil
+		return "", "", nil, false
 	}
 
 	name := ""
+	hasExplicitName := false
 	if len(args) > 0 {
+		hasExplicitName = true
 		name, _ = args[0].(string)
 	}
-	if strings.TrimSpace(name) == "" {
+	if !hasExplicitName {
 		name = inferFunctionName(funcOrName)
 	}
 
 	description := ""
+	hasDescription := false
 	if len(args) > 1 {
+		hasDescription = true
 		description, _ = args[1].(string)
 	}
 
-	return name, description, handler
+	return name, description, handler, hasDescription
 }
 
 func inferFunctionName(handler any) string {
@@ -416,4 +461,16 @@ func removeName(names []string, target string) []string {
 		}
 	}
 	return out
+}
+
+func parseToolParameters(inputText string) (map[string]any, bool, error) {
+	var parsed any
+	if err := json.Unmarshal([]byte(inputText), &parsed); err != nil {
+		return nil, false, nil
+	}
+	parameters, ok := parsed.(map[string]any)
+	if !ok {
+		return nil, true, fmt.Errorf("工具参数必须是 JSON 对象")
+	}
+	return parameters, true, nil
 }

@@ -18,12 +18,6 @@ type CircuitBreaker struct {
 }
 
 func NewCircuitBreaker(failureThreshold, recoveryTimeout int, enabled bool) *CircuitBreaker {
-	if failureThreshold <= 0 {
-		failureThreshold = 3
-	}
-	if recoveryTimeout <= 0 {
-		recoveryTimeout = 300
-	}
 	return &CircuitBreaker{
 		FailureThreshold: failureThreshold,
 		RecoveryTimeout:  recoveryTimeout,
@@ -108,7 +102,7 @@ func (c *CircuitBreaker) GetStatus(toolName string) map[string]any {
 		return map[string]any{
 			"state":              "open",
 			"failure_count":      c.failureCounts[toolName],
-			"open_since":         openAt.Unix(),
+			"open_since":         float64(openAt.UnixNano()) / 1e9,
 			"recover_in_seconds": int(remaining.Seconds()),
 		}
 	}
@@ -143,7 +137,7 @@ func (c *CircuitBreaker) getStatusLocked(toolName string) map[string]any {
 		return map[string]any{
 			"state":              "open",
 			"failure_count":      c.failureCounts[toolName],
-			"open_since":         openAt.Unix(),
+			"open_since":         float64(openAt.UnixNano()) / 1e9,
 			"recover_in_seconds": int(remaining.Seconds()),
 		}
 	}

@@ -102,7 +102,7 @@ func NewCustomFilter(allowed []string, denied []string) *CustomFilter {
 
 func NewCustomFilterWithMode(allowed []string, denied []string, mode string) (*CustomFilter, error) {
 	if mode != "whitelist" && mode != "blacklist" {
-		return nil, fmt.Errorf("invalid mode: %s. must be 'whitelist' or 'blacklist'", mode)
+		return nil, fmt.Errorf("Invalid mode: %s. Must be 'whitelist' or 'blacklist'", mode)
 	}
 
 	allowSet := map[string]struct{}{}

@@ -18,19 +18,9 @@ type ObservationTruncator struct {
 }
 
 func NewObservationTruncator(maxLines, maxBytes int, truncateDirection, outputDir string) *ObservationTruncator {
-	if maxLines <= 0 {
-		maxLines = 2000
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		panic(err)
 	}
-	if maxBytes <= 0 {
-		maxBytes = 51200
-	}
-	if truncateDirection == "" {
-		truncateDirection = "head"
-	}
-	if outputDir == "" {
-		outputDir = "tool-output"
-	}
-	_ = os.MkdirAll(outputDir, 0o755)
 	return &ObservationTruncator{
 		MaxLines:          maxLines,
 		MaxBytes:          maxBytes,
@@ -45,10 +35,7 @@ func (t *ObservationTruncator) Truncate(content string, toolName string) (string
 
 func (t *ObservationTruncator) TruncateWithMetadata(content string, toolName string, metadata map[string]any) (string, map[string]any) {
 	start := time.Now()
-	lines := []string{}
-	if content != "" {
-		lines = strings.Split(content, "\n")
-	}
+	lines := splitLinesLikePython(content)
 	bytesSize := len([]byte(content))
 
 	if len(lines) <= t.MaxLines && bytesSize <= t.MaxBytes {
@@ -67,18 +54,6 @@ func (t *ObservationTruncator) TruncateWithMetadata(content string, toolName str
 
 	truncatedLines := t.truncateLines(lines)
 	preview := strings.Join(truncatedLines, "\n")
-	if len([]byte(preview)) > t.MaxBytes {
-		b := []byte(preview)
-		switch t.TruncateDirection {
-		case "tail":
-			preview = string(b[len(b)-t.MaxBytes:])
-		case "head_tail":
-			half := t.MaxBytes / 2
-			preview = string(b[:half]) + "\n...(中间省略)...\n" + string(b[len(b)-half:])
-		default:
-			preview = string(b[:t.MaxBytes])
-		}
-	}
 
 	fullOutputPath := t.saveFullOutput(content, toolName, metadata)
 	result := map[string]any{
@@ -89,14 +64,9 @@ func (t *ObservationTruncator) TruncateWithMetadata(content string, toolName str
 			"direction":      t.TruncateDirection,
 			"original_lines": len(lines),
 			"original_bytes": bytesSize,
-			"kept_lines": func() int {
-				if preview == "" {
-					return 0
-				}
-				return len(strings.Split(preview, "\n"))
-			}(),
-			"kept_bytes": len([]byte(preview)),
-			"time_ms":    time.Since(start).Milliseconds(),
+			"kept_lines":     len(truncatedLines),
+			"kept_bytes":     len([]byte(preview)),
+			"time_ms":        time.Since(start).Milliseconds(),
 		},
 	}
 	return preview, result
@@ -127,7 +97,7 @@ func (t *ObservationTruncator) saveFullOutput(content, toolName string, metadata
 	payload := map[string]any{
 		"tool":      toolName,
 		"output":    content,
-		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"timestamp": nowPythonISOTime(),
 		"metadata":  metadata,
 	}
 	if payload["metadata"] == nil {
@@ -136,4 +106,17 @@ func (t *ObservationTruncator) saveFullOutput(content, toolName string, metadata
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	_ = os.WriteFile(path, data, 0o644)
 	return path
+}
+
+func splitLinesLikePython(content string) []string {
+	if content == "" {
+		return []string{}
+	}
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }

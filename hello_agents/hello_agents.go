@@ -8,10 +8,6 @@ import (
 	"helloagents-go/hello_agents/tools/builtin"
 )
 
-func init() {
-	_ = core.LoadDotEnv(".env")
-}
-
 // Core exports.
 type HelloAgentsLLM = core.HelloAgentsLLM
 type Config = core.Config
