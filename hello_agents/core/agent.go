@@ -74,10 +74,14 @@ type disabledToolEntry struct {
 	Tool tools.Tool
 }
 
-func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config *Config, toolRegistry *tools.ToolRegistry) (*BaseAgent, error) {
+func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config *Config, toolRegistry *tools.ToolRegistry, agentTypeArgs ...string) (*BaseAgent, error) {
 	cfg := DefaultConfig()
 	if config != nil {
 		cfg = *config
+	}
+	agentType := "BaseAgent"
+	if len(agentTypeArgs) > 0 && agentTypeArgs[0] != "" {
+		agentType = agentTypeArgs[0]
 	}
 
 	historyManager := haContext.NewHistoryManager[Message](
@@ -110,7 +114,7 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 		LLM:            llm,
 		SystemPrompt:   systemPrompt,
 		Config:         cfg,
-		AgentType:      "BaseAgent",
+		AgentType:      agentType,
 		ToolRegistry:   toolRegistry,
 		HistoryManager: historyManager,
 		Truncator:      truncator,
@@ -132,31 +136,34 @@ func NewBaseAgent(name string, llm *HelloAgentsLLM, systemPrompt string, config 
 
 	if cfg.TraceEnabled {
 		traceLogger, err := observability.NewTraceLogger(cfg.TraceDir, cfg.TraceSanitize, cfg.TraceHTMLIncludeRawResponse)
-		if err == nil {
-			agent.TraceLogger = traceLogger
-			agent.TraceLogger.LogEvent("session_start", map[string]any{
-				"agent_name": name,
-				"agent_type": "BaseAgent",
-				"config":     cfg.ToMap(),
-			}, nil)
+		if err != nil {
+			return nil, err
 		}
+		agent.TraceLogger = traceLogger
+		agent.TraceLogger.LogEvent("session_start", map[string]any{
+			"agent_name": name,
+			"agent_type": agentType,
+			"config":     cfg.ToMap(),
+		}, nil)
 	}
 
 	if cfg.SkillsEnabled {
 		loader, err := skills.NewSkillLoader(cfg.SkillsDir)
-		if err == nil {
-			agent.SkillLoader = loader
-			if cfg.SkillsAutoRegister && toolRegistry != nil {
-				toolRegistry.RegisterTool(builtin.NewSkillTool(loader), false)
-			}
+		if err != nil {
+			return nil, err
+		}
+		agent.SkillLoader = loader
+		if cfg.SkillsAutoRegister && toolRegistry != nil {
+			toolRegistry.RegisterTool(builtin.NewSkillTool(loader), false)
 		}
 	}
 
 	if cfg.SessionEnabled {
 		store, err := NewSessionStore(cfg.SessionDir)
-		if err == nil {
-			agent.SessionStore = store
+		if err != nil {
+			return nil, err
 		}
+		agent.SessionStore = store
 	}
 
 	return agent, nil
@@ -320,7 +327,12 @@ func (a *BaseAgent) GenerateSmartSummary(history []Message) string {
 		return a.GenerateSimpleSummary(history)
 	}
 
-	keepFromIndex := boundaries[len(boundaries)-a.Config.MinRetainRounds]
+	boundaryIndex := len(boundaries) - a.Config.MinRetainRounds
+	if a.Config.MinRetainRounds == 0 {
+		// Python list[-0] resolves to list[0], not list[len].
+		boundaryIndex = 0
+	}
+	keepFromIndex := boundaries[boundaryIndex]
 	if keepFromIndex <= 0 || keepFromIndex > len(history) {
 		return a.GenerateSimpleSummary(history)
 	}

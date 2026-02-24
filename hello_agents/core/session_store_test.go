@@ -2,6 +2,7 @@ package core
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,7 +105,74 @@ func TestSessionStoreSavePreservesExplicitEmptyCreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if data.CreatedAt != "" {
-		t.Fatalf("CreatedAt = %q, want explicit empty string", data.CreatedAt)
+	createdAt, _ := data.CreatedAt.(string)
+	if createdAt != "" {
+		t.Fatalf("CreatedAt = %q, want explicit empty string", createdAt)
+	}
+}
+
+func TestSessionStoreSaveUsesPythonISOStyleTimestamps(t *testing.T) {
+	tmp := t.TempDir()
+	store, err := NewSessionStore(tmp)
+	if err != nil {
+		t.Fatalf("NewSessionStore() error = %v", err)
+	}
+
+	path, err := store.Save(
+		map[string]any{"name": "a"},
+		nil,
+		"hash",
+		map[string]map[string]any{},
+		map[string]any{},
+		"iso-ts",
+	)
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := store.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if strings.Contains(data.SavedAt, "Z") {
+		t.Fatalf("SavedAt should be python-style naive timestamp, got %q", data.SavedAt)
+	}
+	if _, err := parsePythonISOTime(data.SavedAt); err != nil {
+		t.Fatalf("SavedAt parse error = %v, value=%q", err, data.SavedAt)
+	}
+	createdAt, ok := data.CreatedAt.(string)
+	if !ok {
+		t.Fatalf("CreatedAt type = %T, want string for default-created value", data.CreatedAt)
+	}
+	if _, err := parsePythonISOTime(createdAt); err != nil {
+		t.Fatalf("CreatedAt parse error = %v, value=%v", err, data.CreatedAt)
+	}
+}
+
+func TestSessionStoreSaveKeepsCreatedAtRawTypeLikePython(t *testing.T) {
+	tmp := t.TempDir()
+	store, err := NewSessionStore(tmp)
+	if err != nil {
+		t.Fatalf("NewSessionStore() error = %v", err)
+	}
+
+	path, err := store.Save(
+		map[string]any{"name": "a"},
+		nil,
+		"hash",
+		map[string]map[string]any{},
+		map[string]any{"created_at": 123},
+		"created-at-raw",
+	)
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := store.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if data.CreatedAt != float64(123) {
+		t.Fatalf("CreatedAt = %#v, want raw numeric value 123", data.CreatedAt)
 	}
 }

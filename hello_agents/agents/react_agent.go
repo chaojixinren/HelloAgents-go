@@ -59,7 +59,7 @@ func NewReActAgent(name string, llm *core.HelloAgentsLLM, systemPrompt string, c
 		systemPrompt = defaultReActSystemPrompt
 	}
 
-	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
+	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry, "ReActAgent")
 	if err != nil {
 		return nil, err
 	}

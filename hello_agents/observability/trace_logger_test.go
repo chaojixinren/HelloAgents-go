@@ -89,3 +89,9 @@ func TestNewTraceLoggerEmptyOutputDirUsesCurrentDirectoryLikePathlib(t *testing.
 	}
 	_ = logger.Finalize()
 }
+
+func TestParseTraceTimestampSupportsPythonISO(t *testing.T) {
+	if _, err := parseTraceTimestamp("2026-02-24T12:34:56.123456"); err != nil {
+		t.Fatalf("parseTraceTimestamp() error = %v", err)
+	}
+}

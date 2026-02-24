@@ -29,7 +29,7 @@ func NewSimpleAgentWithOptions(
 	enableToolCalling bool,
 	maxToolIterations int,
 ) (*SimpleAgent, error) {
-	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
+	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry, "SimpleAgent")
 	if err != nil {
 		return nil, err
 	}
@@ -61,13 +61,14 @@ func (a *SimpleAgent) Run(inputText string, kwargs map[string]any) (string, erro
 			a.Config.TraceSanitize,
 			a.Config.TraceHTMLIncludeRawResponse,
 		)
-		if err == nil {
-			traceLogger = logger
-			traceLogger.LogEvent("session_start", map[string]any{
-				"agent_name": a.Name,
-				"agent_type": "SimpleAgent",
-			}, nil)
+		if err != nil {
+			return "", err
 		}
+		traceLogger = logger
+		traceLogger.LogEvent("session_start", map[string]any{
+			"agent_name": a.Name,
+			"agent_type": "SimpleAgent",
+		}, nil)
 	}
 
 	if traceLogger != nil {
@@ -218,7 +219,11 @@ func (a *SimpleAgent) buildMessages(inputText string) []map[string]any {
 	return messages
 }
 
-func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpand bool) {
+func (a *SimpleAgent) AddTool(tool tools.Tool, autoExpandArgs ...bool) {
+	autoExpand := true
+	if len(autoExpandArgs) > 0 {
+		autoExpand = autoExpandArgs[0]
+	}
 	if a.ToolRegistry == nil {
 		a.ToolRegistry = tools.NewToolRegistry(nil)
 		a.EnableToolCalling = true

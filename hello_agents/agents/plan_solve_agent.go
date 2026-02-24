@@ -258,7 +258,7 @@ func NewPlanSolveAgentWithOptions(
 	enableToolCalling bool,
 	maxToolIterations int,
 ) (*PlanSolveAgent, error) {
-	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
+	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry, "PlanSolveAgent")
 	if err != nil {
 		return nil, err
 	}

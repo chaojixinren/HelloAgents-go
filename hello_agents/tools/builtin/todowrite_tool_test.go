@@ -136,3 +136,18 @@ func TestTodoWriteExplicitEmptyActionDoesNotFallbackToCreate(t *testing.T) {
 		t.Fatalf("text = %q, want unknown action error", resp.Text)
 	}
 }
+
+func TestNewTodoWriteToolPanicsWhenPersistenceDirCannotBeCreatedLikePython(t *testing.T) {
+	tmp := t.TempDir()
+	blocker := filepath.Join(tmp, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("NewTodoWriteTool should panic when persistence dir cannot be created")
+		}
+	}()
+	_ = NewTodoWriteTool(blocker, "todos")
+}

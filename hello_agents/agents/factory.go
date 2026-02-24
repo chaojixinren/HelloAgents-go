@@ -36,12 +36,12 @@ func DefaultSubagentFactory(agentType string, llm *core.HelloAgentsLLM, toolRegi
 	}
 
 	systemPrompt := getSystemPromptForType(agentType)
-	subagent, err := CreateAgent(agentType, "subagent-"+strings.ToLower(agentType), llm, toolRegistry, cfg, systemPrompt)
+	subagent, err := CreateAgent(agentType, "subagent-"+agentType, llm, toolRegistry, cfg, systemPrompt)
 	if err != nil {
 		return nil, err
 	}
 
-	if r, ok := subagent.(*ReActAgent); ok && cfg.SubagentMaxSteps > 0 {
+	if r, ok := subagent.(*ReActAgent); ok {
 		r.MaxSteps = cfg.SubagentMaxSteps
 	}
 	return subagent, nil

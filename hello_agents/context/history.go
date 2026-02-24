@@ -109,7 +109,12 @@ func (h *HistoryManager[T]) Compress(summary string) {
 		return
 	}
 
-	keepFromIndex := boundaries[len(boundaries)-h.MinRetainRounds]
+	boundaryIndex := len(boundaries) - h.MinRetainRounds
+	if h.MinRetainRounds == 0 {
+		// Python list[-0] resolves to list[0], not list[len].
+		boundaryIndex = 0
+	}
+	keepFromIndex := boundaries[boundaryIndex]
 	if keepFromIndex < 0 || keepFromIndex > len(h.history) {
 		return
 	}

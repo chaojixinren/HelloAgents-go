@@ -125,7 +125,9 @@ func NewTodoWriteTool(projectRoot string, persistenceDir string) *TodoWriteTool 
 		},
 	}
 	fullDir := filepath.Join(projectRoot, persistenceDir)
-	_ = os.MkdirAll(fullDir, 0o755)
+	if err := os.MkdirAll(fullDir, 0o755); err != nil {
+		panic(err)
+	}
 	return &TodoWriteTool{
 		BaseTool:       base,
 		ProjectRoot:    projectRoot,

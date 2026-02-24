@@ -19,7 +19,7 @@ type SessionStore struct {
 
 type SessionData struct {
 	SessionID      string                    `json:"session_id"`
-	CreatedAt      string                    `json:"created_at"`
+	CreatedAt      any                       `json:"created_at"`
 	SavedAt        string                    `json:"saved_at"`
 	AgentConfig    map[string]any            `json:"agent_config"`
 	History        []map[string]any          `json:"history"`
@@ -71,13 +71,9 @@ func (s *SessionStore) Save(
 		historyMaps = append(historyMaps, msg.ToMap())
 	}
 
-	createdAt := nowPythonISOTime()
+	createdAt := any(nowPythonISOTime())
 	if rawCreatedAt, exists := metadata["created_at"]; exists {
-		if s, ok := rawCreatedAt.(string); ok {
-			createdAt = s
-		} else {
-			createdAt = fmt.Sprintf("%v", rawCreatedAt)
-		}
+		createdAt = rawCreatedAt
 	}
 
 	record := SessionData{

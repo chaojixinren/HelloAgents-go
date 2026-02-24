@@ -85,7 +85,7 @@ func NewReflectionAgentWithOptions(
 	if systemPrompt == "" {
 		systemPrompt = defaultReflectionSystemPrompt
 	}
-	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry)
+	base, err := core.NewBaseAgent(name, llm, systemPrompt, config, toolRegistry, "ReflectionAgent")
 	if err != nil {
 		return nil, err
 	}

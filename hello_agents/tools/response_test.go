@@ -64,3 +64,15 @@ func TestToolResponseFromJSONPanicsOnInvalidJSONLikePython(t *testing.T) {
 	}()
 	_ = ToolResponseFromJSON("not-json")
 }
+
+func TestToolResponseFromMapPanicsOnInvalidStatusLikePythonEnum(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("ToolResponseFromMap() should panic on invalid status")
+		}
+	}()
+	_ = ToolResponseFromMap(map[string]any{
+		"status": "unknown",
+		"text":   "x",
+	})
+}

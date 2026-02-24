@@ -69,6 +69,27 @@ func TestNewHelloAgentsLLMPanicsOnInvalidEnvTimeoutLikePythonInt(t *testing.T) {
 	_, _ = NewHelloAgentsLLM("model-x", "", "", 0.7, nil, nil, nil)
 }
 
+func TestNewHelloAgentsLLMIgnoresProviderKwargLikePython(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "k")
+	t.Setenv("LLM_BASE_URL", "https://example.com/v1")
+
+	llm, err := NewHelloAgentsLLM(
+		"model-x",
+		"",
+		"",
+		0.7,
+		nil,
+		nil,
+		map[string]any{"provider": "deepseek"},
+	)
+	if err != nil {
+		t.Fatalf("NewHelloAgentsLLM() error = %v", err)
+	}
+	if llm.Provider != "" {
+		t.Fatalf("Provider = %q, want empty like python (provider kwarg is not instance attribute)", llm.Provider)
+	}
+}
+
 func TestStreamInvokePassesNilTemperatureByDefaultLikePython(t *testing.T) {
 	adapter := &captureStreamAdapter{}
 	llm := &HelloAgentsLLM{

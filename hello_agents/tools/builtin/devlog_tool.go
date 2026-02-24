@@ -318,7 +318,9 @@ func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *De
 	}
 
 	fullPersistenceDir := filepath.Join(projectRoot, persistenceDir)
-	_ = os.MkdirAll(fullPersistenceDir, 0o755)
+	if err := os.MkdirAll(fullPersistenceDir, 0o755); err != nil {
+		panic(err)
+	}
 
 	tool := &DevLogTool{
 		BaseTool:       base,

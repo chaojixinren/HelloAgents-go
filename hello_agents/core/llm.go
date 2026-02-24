@@ -59,17 +59,12 @@ func NewHelloAgentsLLM(model, apiKey, baseURL string, temperature float64, maxTo
 		return nil, NewHelloAgentsException("必须提供服务地址（base_url参数或LLM_BASE_URL环境变量）")
 	}
 
-	provider := ""
-	if v, ok := kwargs["provider"].(string); ok {
-		provider = v
-	}
 	if maxTokens != nil && *maxTokens == 0 {
 		maxTokens = nil
 	}
 
 	llm := &HelloAgentsLLM{
 		Model:       model,
-		Provider:    provider,
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
 		Timeout:     timeoutValue,

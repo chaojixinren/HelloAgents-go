@@ -186,3 +186,51 @@ func TestRegisterFunctionKeepsExplicitEmptyDescriptionLikePython(t *testing.T) {
 		t.Fatalf("description = %q, want explicit empty string", fn.Description)
 	}
 }
+
+func TestRegisterFunctionLegacyNilDescriptionFallsBackToDefault(t *testing.T) {
+	registry := NewToolRegistry(nil)
+	registry.RegisterFunction("legacy", nil, func(input string) string {
+		return input
+	})
+
+	fn, ok := registry.GetAllFunctions()["legacy"]
+	if !ok {
+		t.Fatalf("legacy function not registered")
+	}
+	if fn.Description != "执行 legacy" {
+		t.Fatalf("description = %q, want %q", fn.Description, "执行 legacy")
+	}
+}
+
+func TestRegisterFunctionModernNilNameAndDescriptionUseDefaults(t *testing.T) {
+	registry := NewToolRegistry(nil)
+	registry.RegisterFunction(func(input string) any {
+		return input
+	}, nil, nil)
+
+	names := registry.ListFunctions()
+	if len(names) != 1 {
+		t.Fatalf("len(names) = %d, want 1", len(names))
+	}
+	name := names[0]
+	if name == "" {
+		t.Fatalf("inferred function name should not be empty")
+	}
+	fn := registry.GetAllFunctions()[name]
+	if fn.Description != "执行 "+name {
+		t.Fatalf("description = %q, want %q", fn.Description, "执行 "+name)
+	}
+}
+
+func TestClearReadCacheEmptyStringClearsAllLikePythonTruthy(t *testing.T) {
+	registry := NewToolRegistry(nil)
+	registry.CacheReadMetadata("a.txt", map[string]any{"file_mtime_ms": 1})
+	registry.CacheReadMetadata("b.txt", map[string]any{"file_mtime_ms": 2})
+
+	empty := ""
+	registry.ClearReadCache(&empty)
+
+	if got := registry.ReadMetadataCache(); len(got) != 0 {
+		t.Fatalf("ReadMetadataCache len = %d, want 0", len(got))
+	}
+}

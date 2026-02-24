@@ -355,7 +355,7 @@ func (r *ToolRegistry) GetReadMetadata(filePath string) map[string]any {
 func (r *ToolRegistry) ClearReadCache(filePath *string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if filePath == nil {
+	if filePath == nil || *filePath == "" {
 		r.readMetadataCache = map[string]map[string]any{}
 		return
 	}
@@ -380,9 +380,14 @@ func parseFunctionRegistration(funcOrName any, args ...any) (string, string, fun
 		if len(args) < 2 {
 			return "", "", nil, false
 		}
-		description, _ := args[0].(string)
+		description := ""
+		hasDescription := false
+		if args[0] != nil {
+			description, _ = args[0].(string)
+			hasDescription = true
+		}
 		handler := coerceFunctionHandler(args[1])
-		return name, description, handler, true
+		return name, description, handler, hasDescription
 	}
 
 	// Modern style: register_function(func, name=None, description=None)
@@ -393,7 +398,7 @@ func parseFunctionRegistration(funcOrName any, args ...any) (string, string, fun
 
 	name := ""
 	hasExplicitName := false
-	if len(args) > 0 {
+	if len(args) > 0 && args[0] != nil {
 		hasExplicitName = true
 		name, _ = args[0].(string)
 	}
@@ -403,7 +408,7 @@ func parseFunctionRegistration(funcOrName any, args ...any) (string, string, fun
 
 	description := ""
 	hasDescription := false
-	if len(args) > 1 {
+	if len(args) > 1 && args[1] != nil {
 		hasDescription = true
 		description, _ = args[1].(string)
 	}

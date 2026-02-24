@@ -1,6 +1,8 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"helloagents-go/hello_agents/tools"
@@ -358,9 +360,6 @@ func TestBaseAgentCreateLightLLMUsesEnvLikePython(t *testing.T) {
 	if light.Model != "light-model" {
 		t.Fatalf("light model = %q, want %q", light.Model, "light-model")
 	}
-	if light.Provider != "deepseek" {
-		t.Fatalf("light provider = %q, want %q", light.Provider, "deepseek")
-	}
 }
 
 func TestBaseAgentStringUsesModelLikePython(t *testing.T) {
@@ -406,9 +405,6 @@ func TestBaseAgentGetSummaryLLMUsesSummaryConfigAndEnv(t *testing.T) {
 	}
 	if summaryLLM.Model != "deepseek-chat" {
 		t.Fatalf("summary model = %q, want %q", summaryLLM.Model, "deepseek-chat")
-	}
-	if summaryLLM.Provider != "deepseek" {
-		t.Fatalf("summary provider = %q, want %q", summaryLLM.Provider, "deepseek")
 	}
 	if summaryLLM.APIKey != "env-key" {
 		t.Fatalf("summary APIKey = %q, want env key", summaryLLM.APIKey)
@@ -568,5 +564,24 @@ func TestRunAsSubagentRestoresToolsAfterFilter(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("tools should be fully restored, missing: %#v", want)
+	}
+}
+
+func TestNewBaseAgentReturnsErrorWhenTraceLoggerInitFailsLikePython(t *testing.T) {
+	tmp := t.TempDir()
+	blocker := filepath.Join(tmp, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.TraceEnabled = true
+	cfg.TraceDir = filepath.Join(blocker, "traces")
+	cfg.SkillsEnabled = false
+	cfg.SessionEnabled = false
+
+	_, err := NewBaseAgent("tester", &HelloAgentsLLM{Model: "m"}, "", &cfg, nil)
+	if err == nil {
+		t.Fatalf("NewBaseAgent() should return error when trace logger init fails")
 	}
 }

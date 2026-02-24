@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -65,7 +66,12 @@ func ToolResponseFromMap(data map[string]any) ToolResponse {
 		Data:   map[string]any{},
 	}
 	if s, ok := data["status"].(string); ok {
-		resp.Status = ToolStatus(s)
+		switch ToolStatus(s) {
+		case ToolStatusSuccess, ToolStatusPartial, ToolStatusError:
+			resp.Status = ToolStatus(s)
+		default:
+			panic(fmt.Errorf("invalid ToolStatus: %s", s))
+		}
 	}
 	if text, ok := data["text"].(string); ok {
 		resp.Text = text

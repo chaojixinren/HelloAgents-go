@@ -146,3 +146,33 @@ func TestGeminiStreamReturnsErrorWithoutInvokeFallback(t *testing.T) {
 		t.Fatalf("expected stream error, got nil")
 	}
 }
+
+func TestConvertGeminiMessagesPreservesNonStringContentLikePython(t *testing.T) {
+	systemInstruction, converted := convertGeminiMessages([]map[string]any{
+		{"role": "system", "content": map[string]any{"lang": "zh"}},
+		{"role": "user", "content": map[string]any{"text": "hi"}},
+	})
+
+	systemMap, ok := systemInstruction.(map[string]any)
+	if !ok {
+		t.Fatalf("system_instruction type = %T, want map[string]any", systemInstruction)
+	}
+	if systemMap["lang"] != "zh" {
+		t.Fatalf("system_instruction.lang = %v, want zh", systemMap["lang"])
+	}
+
+	if len(converted) != 1 {
+		t.Fatalf("len(converted) = %d, want 1", len(converted))
+	}
+	parts, ok := converted[0]["parts"].([]map[string]any)
+	if !ok || len(parts) != 1 {
+		t.Fatalf("parts type/len = %T/%d, want []map[string]any/1", converted[0]["parts"], len(parts))
+	}
+	contentMap, ok := parts[0]["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("parts[0].text type = %T, want map[string]any", parts[0]["text"])
+	}
+	if contentMap["text"] != "hi" {
+		t.Fatalf("parts[0].text.text = %v, want hi", contentMap["text"])
+	}
+}
