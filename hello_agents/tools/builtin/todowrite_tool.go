@@ -126,12 +126,14 @@ func NewTodoWriteTool(projectRoot string, persistenceDir string) *TodoWriteTool 
 	}
 	fullDir := filepath.Join(projectRoot, persistenceDir)
 	_ = os.MkdirAll(fullDir, 0o755)
-	return &TodoWriteTool{
+	t := &TodoWriteTool{
 		BaseTool:       base,
 		ProjectRoot:    projectRoot,
 		PersistenceDir: fullDir,
 		CurrentTodos:   TodoList{Summary: "", Todos: []TodoItem{}},
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *TodoWriteTool) GetParameters() []tools.ToolParameter {

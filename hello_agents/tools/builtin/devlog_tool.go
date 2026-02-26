@@ -328,6 +328,7 @@ func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *De
 		persistenceDir: fullPersistenceDir,
 		store:          NewDevLogStore(sessionID, agentName),
 	}
+	tool.BaseTool.SetRunImpl(tool.Run)
 	tool.loadIfExists()
 	return tool
 }

@@ -55,7 +55,9 @@ func NewTaskTool(agentFactory AgentFactory, toolRegistry *tools.ToolRegistry) *T
 			Required:    false,
 		},
 	}
-	return &TaskTool{BaseTool: base, agentFactory: agentFactory, toolRegistry: toolRegistry}
+	t := &TaskTool{BaseTool: base, agentFactory: agentFactory, toolRegistry: toolRegistry}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *TaskTool) GetParameters() []tools.ToolParameter {

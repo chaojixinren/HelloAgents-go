@@ -57,12 +57,14 @@ func NewReadToolWithOptions(projectRoot string, workingDir string, registry *too
 			Default:     2000,
 		},
 	}
-	return &ReadTool{
+	t := &ReadTool{
 		BaseTool:    base,
 		ProjectRoot: absRoot,
 		WorkingDir:  absWorkingDir,
 		Registry:    registry,
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *ReadTool) GetParameters() []tools.ToolParameter {
@@ -269,12 +271,14 @@ func NewWriteToolWithOptions(projectRoot string, workingDir string, registry *to
 		"content":       {Name: "content", Type: "string", Description: "文件内容", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &WriteTool{
+	t := &WriteTool{
 		BaseTool:    base,
 		ProjectRoot: absRoot,
 		WorkingDir:  absWorkingDir,
 		Registry:    registry,
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *WriteTool) GetParameters() []tools.ToolParameter {
@@ -405,12 +409,14 @@ func NewEditToolWithOptions(projectRoot string, workingDir string, registry *too
 		"new_string":    {Name: "new_string", Type: "string", Description: "替换后的内容", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &EditTool{
+	t := &EditTool{
 		BaseTool:    base,
 		ProjectRoot: absRoot,
 		WorkingDir:  absWorkingDir,
 		Registry:    registry,
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *EditTool) GetParameters() []tools.ToolParameter {
@@ -553,12 +559,14 @@ func NewMultiEditToolWithOptions(projectRoot string, workingDir string, registry
 		"edits":         {Name: "edits", Type: "array", Description: "替换列表，每项包含 old_string 和 new_string", Required: true},
 		"file_mtime_ms": {Name: "file_mtime_ms", Type: "integer", Description: "缓存的文件修改时间（用于冲突检测）", Required: false},
 	}
-	return &MultiEditTool{
+	t := &MultiEditTool{
 		BaseTool:    base,
 		ProjectRoot: absRoot,
 		WorkingDir:  absWorkingDir,
 		Registry:    registry,
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *MultiEditTool) GetParameters() []tools.ToolParameter {

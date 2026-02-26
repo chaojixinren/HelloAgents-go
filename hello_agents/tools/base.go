@@ -39,11 +39,19 @@ type Tool interface {
 }
 
 // BaseTool provides reusable defaults.
+//
+// Go embedded structs do not support virtual dispatch: if a concrete tool
+// (e.g. ReadTool) embeds BaseTool and overrides Run(), calling
+// BaseTool.RunWithTiming will still invoke BaseTool.Run, NOT ReadTool.Run.
+//
+// To solve this, concrete tools must call SetRunImpl(t.Run) in their
+// constructor so that RunWithTiming dispatches to the correct implementation.
 type BaseTool struct {
 	Name        string
 	Description string
 	Expandable  bool
 	Parameters  map[string]ToolParameter
+	runImpl     func(map[string]any) ToolResponse
 }
 
 func NewBaseTool(name, description string, expandable bool) BaseTool {
@@ -55,11 +63,20 @@ func NewBaseTool(name, description string, expandable bool) BaseTool {
 	}
 }
 
+// SetRunImpl wires the concrete tool's Run method so that RunWithTiming
+// dispatches correctly despite Go's lack of virtual method dispatch.
+func (t *BaseTool) SetRunImpl(fn func(map[string]any) ToolResponse) {
+	t.runImpl = fn
+}
+
 func (t *BaseTool) GetName() string { return t.Name }
 
 func (t *BaseTool) GetDescription() string { return t.Description }
 
 func (t *BaseTool) Run(parameters map[string]any) ToolResponse {
+	if t.runImpl != nil {
+		return t.runImpl(parameters)
+	}
 	return Error("tool run() not implemented", ToolErrorCodeInternalError, map[string]any{"tool": t.Name})
 }
 
@@ -94,11 +111,18 @@ func (t *BaseTool) RunWithTiming(parameters map[string]any) (resp ToolResponse) 
 		resp.Context["tool_name"] = t.Name
 	}()
 
-	resp = t.Run(parameters)
+	if t.runImpl != nil {
+		resp = t.runImpl(parameters)
+	} else {
+		resp = t.Run(parameters)
+	}
 	return resp
 }
 
 func (t *BaseTool) ARun(parameters map[string]any) ToolResponse {
+	if t.runImpl != nil {
+		return t.runImpl(parameters)
+	}
 	return t.Run(parameters)
 }
 

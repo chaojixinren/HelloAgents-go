@@ -53,10 +53,12 @@ func NewSkillTool(skillLoader *skills.SkillLoader) *SkillTool {
 		},
 	}
 
-	return &SkillTool{
+	t := &SkillTool{
 		BaseTool:    base,
 		skillLoader: skillLoader,
 	}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *SkillTool) GetParameters() []tools.ToolParameter {
