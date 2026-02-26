@@ -194,3 +194,15 @@ func (l *HelloAgentsLLM) Validate() error {
 	}
 	return nil
 }
+
+// NewLLMFromAdapter creates a HelloAgentsLLM with a custom adapter for testing.
+func NewLLMFromAdapter(model, apiKey, baseURL string, timeout int, temperature float64, adapter BaseLLMAdapter) *HelloAgentsLLM {
+	return &HelloAgentsLLM{
+		Model:       model,
+		APIKey:      apiKey,
+		BaseURL:     baseURL,
+		Timeout:     timeout,
+		Temperature: temperature,
+		adapter:     adapter,
+	}
+}
