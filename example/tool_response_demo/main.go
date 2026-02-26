@@ -24,11 +24,13 @@ func NewDemoCalculatorTool() *DemoCalculatorTool {
 	return t
 }
 
-func (t *DemoCalculatorTool) GetName() string                            { return t.Name }
-func (t *DemoCalculatorTool) GetDescription() string                     { return t.Description }
-func (t *DemoCalculatorTool) GetParameters() []tools.ToolParameter       { return t.BaseTool.GetParameters() }
-func (t *DemoCalculatorTool) RunWithTiming(p map[string]any) tools.ToolResponse { return t.BaseTool.RunWithTiming(p) }
-func (t *DemoCalculatorTool) ARun(p map[string]any) tools.ToolResponse   { return t.Run(p) }
+func (t *DemoCalculatorTool) GetName() string                      { return t.Name }
+func (t *DemoCalculatorTool) GetDescription() string               { return t.Description }
+func (t *DemoCalculatorTool) GetParameters() []tools.ToolParameter { return t.BaseTool.GetParameters() }
+func (t *DemoCalculatorTool) RunWithTiming(p map[string]any) tools.ToolResponse {
+	return t.BaseTool.RunWithTiming(p)
+}
+func (t *DemoCalculatorTool) ARun(p map[string]any) tools.ToolResponse           { return t.Run(p) }
 func (t *DemoCalculatorTool) ARunWithTiming(p map[string]any) tools.ToolResponse { return t.Run(p) }
 
 func (t *DemoCalculatorTool) Run(parameters map[string]any) tools.ToolResponse {

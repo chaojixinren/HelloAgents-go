@@ -27,11 +27,13 @@ func NewUnstableTool(failUntil int) *UnstableTool {
 	return t
 }
 
-func (t *UnstableTool) GetName() string                            { return t.Name }
-func (t *UnstableTool) GetDescription() string                     { return t.Description }
-func (t *UnstableTool) GetParameters() []tools.ToolParameter       { return t.BaseTool.GetParameters() }
-func (t *UnstableTool) RunWithTiming(p map[string]any) tools.ToolResponse { return t.BaseTool.RunWithTiming(p) }
-func (t *UnstableTool) ARun(p map[string]any) tools.ToolResponse   { return t.Run(p) }
+func (t *UnstableTool) GetName() string                      { return t.Name }
+func (t *UnstableTool) GetDescription() string               { return t.Description }
+func (t *UnstableTool) GetParameters() []tools.ToolParameter { return t.BaseTool.GetParameters() }
+func (t *UnstableTool) RunWithTiming(p map[string]any) tools.ToolResponse {
+	return t.BaseTool.RunWithTiming(p)
+}
+func (t *UnstableTool) ARun(p map[string]any) tools.ToolResponse           { return t.Run(p) }
 func (t *UnstableTool) ARunWithTiming(p map[string]any) tools.ToolResponse { return t.Run(p) }
 
 func (t *UnstableTool) Run(parameters map[string]any) tools.ToolResponse {

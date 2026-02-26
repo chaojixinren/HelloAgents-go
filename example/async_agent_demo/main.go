@@ -28,11 +28,13 @@ func NewSearchTool() *SearchTool {
 	return t
 }
 
-func (t *SearchTool) GetName() string                            { return t.Name }
-func (t *SearchTool) GetDescription() string                     { return t.Description }
-func (t *SearchTool) GetParameters() []tools.ToolParameter       { return t.BaseTool.GetParameters() }
-func (t *SearchTool) RunWithTiming(p map[string]any) tools.ToolResponse { return t.BaseTool.RunWithTiming(p) }
-func (t *SearchTool) ARun(p map[string]any) tools.ToolResponse   { return t.Run(p) }
+func (t *SearchTool) GetName() string                      { return t.Name }
+func (t *SearchTool) GetDescription() string               { return t.Description }
+func (t *SearchTool) GetParameters() []tools.ToolParameter { return t.BaseTool.GetParameters() }
+func (t *SearchTool) RunWithTiming(p map[string]any) tools.ToolResponse {
+	return t.BaseTool.RunWithTiming(p)
+}
+func (t *SearchTool) ARun(p map[string]any) tools.ToolResponse           { return t.Run(p) }
 func (t *SearchTool) ARunWithTiming(p map[string]any) tools.ToolResponse { return t.Run(p) }
 
 func (t *SearchTool) Run(parameters map[string]any) tools.ToolResponse {

@@ -38,11 +38,13 @@ func NewWeatherTool() *WeatherTool {
 	return t
 }
 
-func (t *WeatherTool) GetName() string                            { return t.Name }
-func (t *WeatherTool) GetDescription() string                     { return t.Description }
-func (t *WeatherTool) GetParameters() []tools.ToolParameter       { return t.BaseTool.GetParameters() }
-func (t *WeatherTool) RunWithTiming(p map[string]any) tools.ToolResponse { return t.BaseTool.RunWithTiming(p) }
-func (t *WeatherTool) ARun(p map[string]any) tools.ToolResponse   { return t.Run(p) }
+func (t *WeatherTool) GetName() string                      { return t.Name }
+func (t *WeatherTool) GetDescription() string               { return t.Description }
+func (t *WeatherTool) GetParameters() []tools.ToolParameter { return t.BaseTool.GetParameters() }
+func (t *WeatherTool) RunWithTiming(p map[string]any) tools.ToolResponse {
+	return t.BaseTool.RunWithTiming(p)
+}
+func (t *WeatherTool) ARun(p map[string]any) tools.ToolResponse           { return t.Run(p) }
 func (t *WeatherTool) ARunWithTiming(p map[string]any) tools.ToolResponse { return t.Run(p) }
 
 func (t *WeatherTool) Run(parameters map[string]any) tools.ToolResponse {

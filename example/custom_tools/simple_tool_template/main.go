@@ -27,11 +27,13 @@ func NewTextProcessorTool() *TextProcessorTool {
 	return t
 }
 
-func (t *TextProcessorTool) GetName() string                            { return t.Name }
-func (t *TextProcessorTool) GetDescription() string                     { return t.Description }
-func (t *TextProcessorTool) GetParameters() []tools.ToolParameter       { return t.BaseTool.GetParameters() }
-func (t *TextProcessorTool) RunWithTiming(p map[string]any) tools.ToolResponse { return t.BaseTool.RunWithTiming(p) }
-func (t *TextProcessorTool) ARun(p map[string]any) tools.ToolResponse   { return t.Run(p) }
+func (t *TextProcessorTool) GetName() string                      { return t.Name }
+func (t *TextProcessorTool) GetDescription() string               { return t.Description }
+func (t *TextProcessorTool) GetParameters() []tools.ToolParameter { return t.BaseTool.GetParameters() }
+func (t *TextProcessorTool) RunWithTiming(p map[string]any) tools.ToolResponse {
+	return t.BaseTool.RunWithTiming(p)
+}
+func (t *TextProcessorTool) ARun(p map[string]any) tools.ToolResponse           { return t.Run(p) }
 func (t *TextProcessorTool) ARunWithTiming(p map[string]any) tools.ToolResponse { return t.Run(p) }
 
 func (t *TextProcessorTool) Run(parameters map[string]any) tools.ToolResponse {

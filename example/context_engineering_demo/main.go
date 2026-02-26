@@ -51,7 +51,7 @@ func demoHistoryManager() {
 	fmt.Println(strings.Repeat("=", 50))
 
 	hm := haContext.NewHistoryManager[core.Message](
-		2,  // 压缩时保留最近 2 轮
+		2, // 压缩时保留最近 2 轮
 		0.8,
 		func(summary string) core.Message {
 			return core.NewMessage("[摘要] "+summary, core.MessageRoleSummary, nil)
