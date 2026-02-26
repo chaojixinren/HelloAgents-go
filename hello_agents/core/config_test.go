@@ -14,32 +14,28 @@ func TestFromEnvDebugMatchesPythonTrueOnlyRule(t *testing.T) {
 	}
 }
 
-func TestFromEnvPanicsOnInvalidTemperature(t *testing.T) {
+func TestFromEnvFallsBackOnInvalidTemperature(t *testing.T) {
 	t.Setenv("DEBUG", "false")
 	t.Setenv("LOG_LEVEL", "INFO")
 	t.Setenv("TEMPERATURE", "bad-number")
 	t.Setenv("MAX_TOKENS", "")
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("FromEnv() should panic when TEMPERATURE is invalid")
-		}
-	}()
-	_ = FromEnv()
+	cfg := FromEnv()
+	if cfg.Temperature != 0.7 {
+		t.Fatalf("FromEnv().Temperature = %v, want 0.7 fallback on invalid input", cfg.Temperature)
+	}
 }
 
-func TestFromEnvPanicsOnInvalidMaxTokens(t *testing.T) {
+func TestFromEnvIgnoresInvalidMaxTokens(t *testing.T) {
 	t.Setenv("DEBUG", "false")
 	t.Setenv("LOG_LEVEL", "INFO")
 	t.Setenv("TEMPERATURE", "0.7")
 	t.Setenv("MAX_TOKENS", "not-int")
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("FromEnv() should panic when MAX_TOKENS is invalid")
-		}
-	}()
-	_ = FromEnv()
+	cfg := FromEnv()
+	if cfg.MaxTokens != nil {
+		t.Fatalf("FromEnv().MaxTokens = %v, want nil on invalid input", *cfg.MaxTokens)
+	}
 }
 
 func TestFromEnvKeepsExplicitEmptyLogLevelLikeOsGetenv(t *testing.T) {
@@ -54,16 +50,14 @@ func TestFromEnvKeepsExplicitEmptyLogLevelLikeOsGetenv(t *testing.T) {
 	}
 }
 
-func TestFromEnvPanicsWhenTemperatureIsExplicitEmpty(t *testing.T) {
+func TestFromEnvFallsBackWhenTemperatureIsExplicitEmpty(t *testing.T) {
 	t.Setenv("DEBUG", "false")
 	t.Setenv("LOG_LEVEL", "INFO")
 	t.Setenv("TEMPERATURE", "")
 	t.Setenv("MAX_TOKENS", "")
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("FromEnv() should panic when TEMPERATURE is explicitly empty")
-		}
-	}()
-	_ = FromEnv()
+	cfg := FromEnv()
+	if cfg.Temperature != 0.7 {
+		t.Fatalf("FromEnv().Temperature = %v, want 0.7 fallback on empty string", cfg.Temperature)
+	}
 }

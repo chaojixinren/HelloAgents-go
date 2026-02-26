@@ -192,17 +192,16 @@ func FromEnv() Config {
 	}
 	temperatureValue, err := strconv.ParseFloat(temperatureRaw, 64)
 	if err != nil {
-		panic(err)
+		temperatureValue = 0.7
 	}
 	cfg.Temperature = temperatureValue
 
 	maxTokensRaw, hasMaxTokens := os.LookupEnv("MAX_TOKENS")
 	if hasMaxTokens && maxTokensRaw != "" {
 		maxTokensValue, err := strconv.Atoi(maxTokensRaw)
-		if err != nil {
-			panic(err)
+		if err == nil {
+			cfg.MaxTokens = &maxTokensValue
 		}
-		cfg.MaxTokens = &maxTokensValue
 	} else {
 		cfg.MaxTokens = nil
 	}

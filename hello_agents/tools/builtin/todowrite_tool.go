@@ -125,9 +125,7 @@ func NewTodoWriteTool(projectRoot string, persistenceDir string) *TodoWriteTool 
 		},
 	}
 	fullDir := filepath.Join(projectRoot, persistenceDir)
-	if err := os.MkdirAll(fullDir, 0o755); err != nil {
-		panic(err)
-	}
+	_ = os.MkdirAll(fullDir, 0o755)
 	return &TodoWriteTool{
 		BaseTool:       base,
 		ProjectRoot:    projectRoot,
@@ -216,7 +214,11 @@ func (t *TodoWriteTool) Run(parameters map[string]any) (resp tools.ToolResponse)
 	t.CurrentTodos = TodoList{Summary: summary, Todos: items}
 	recap := t.generateRecap()
 	if err := t.persistTodos(); err != nil {
-		panic(err)
+		return tools.Error(
+			fmt.Sprintf("任务列表持久化失败：%v", err),
+			tools.ToolErrorCodeInternalError,
+			nil,
+		)
 	}
 
 	return tools.Success(recap, map[string]any{

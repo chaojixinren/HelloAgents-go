@@ -108,8 +108,8 @@ func TestTodoWriteReturnsInternalErrorWhenPersistFails(t *testing.T) {
 	if resp.ErrorInfo == nil || resp.ErrorInfo["code"] != tools.ToolErrorCodeInternalError {
 		t.Fatalf("error = %#v, want INTERNAL_ERROR", resp.ErrorInfo)
 	}
-	if !strings.HasPrefix(resp.Text, "处理任务列表失败：") {
-		t.Fatalf("text = %q, want internal failure prefix", resp.Text)
+	if !strings.HasPrefix(resp.Text, "任务列表持久化失败：") {
+		t.Fatalf("text = %q, want persist failure prefix", resp.Text)
 	}
 }
 
@@ -137,17 +137,15 @@ func TestTodoWriteExplicitEmptyActionDoesNotFallbackToCreate(t *testing.T) {
 	}
 }
 
-func TestNewTodoWriteToolPanicsWhenPersistenceDirCannotBeCreatedLikePython(t *testing.T) {
+func TestNewTodoWriteToolDoesNotPanicWhenPersistenceDirCannotBeCreated(t *testing.T) {
 	tmp := t.TempDir()
 	blocker := filepath.Join(tmp, "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("NewTodoWriteTool should panic when persistence dir cannot be created")
-		}
-	}()
-	_ = NewTodoWriteTool(blocker, "todos")
+	tool := NewTodoWriteTool(blocker, "todos")
+	if tool == nil {
+		t.Fatalf("NewTodoWriteTool returned nil when persistence dir cannot be created")
+	}
 }

@@ -56,17 +56,15 @@ func TestNewHelloAgentsLLMMaxTokensZeroTreatedAsNoneLikePython(t *testing.T) {
 	}
 }
 
-func TestNewHelloAgentsLLMPanicsOnInvalidEnvTimeoutLikePythonInt(t *testing.T) {
+func TestNewHelloAgentsLLMReturnsErrorOnInvalidEnvTimeout(t *testing.T) {
 	t.Setenv("LLM_API_KEY", "k")
 	t.Setenv("LLM_BASE_URL", "https://example.com/v1")
 	t.Setenv("LLM_TIMEOUT", "bad-timeout")
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("NewHelloAgentsLLM should panic when LLM_TIMEOUT is invalid")
-		}
-	}()
-	_, _ = NewHelloAgentsLLM("model-x", "", "", 0.7, nil, nil, nil)
+	_, err := NewHelloAgentsLLM("model-x", "", "", 0.7, nil, nil, nil)
+	if err == nil {
+		t.Fatalf("NewHelloAgentsLLM should return error when LLM_TIMEOUT is invalid")
+	}
 }
 
 func TestNewHelloAgentsLLMIgnoresProviderKwargLikePython(t *testing.T) {

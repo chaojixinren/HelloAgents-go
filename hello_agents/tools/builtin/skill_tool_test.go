@@ -58,7 +58,7 @@ hello $ARGUMENTS
 	if resp.Status != tools.ToolStatusError {
 		t.Fatalf("status = %q, want %q", resp.Status, tools.ToolStatusError)
 	}
-	if resp.ErrorInfo == nil || resp.ErrorInfo["code"] != tools.ToolErrorCodeInternalError {
-		t.Fatalf("error = %#v, want INTERNAL_ERROR", resp.ErrorInfo)
+	if resp.ErrorInfo == nil || resp.ErrorInfo["code"] != tools.ToolErrorCodeInvalidParam {
+		t.Fatalf("error = %#v, want INVALID_PARAM", resp.ErrorInfo)
 	}
 }

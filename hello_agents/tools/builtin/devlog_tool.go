@@ -318,9 +318,7 @@ func NewDevLogTool(sessionID, agentName, projectRoot, persistenceDir string) *De
 	}
 
 	fullPersistenceDir := filepath.Join(projectRoot, persistenceDir)
-	if err := os.MkdirAll(fullPersistenceDir, 0o755); err != nil {
-		panic(err)
-	}
+	_ = os.MkdirAll(fullPersistenceDir, 0o755)
 
 	tool := &DevLogTool{
 		BaseTool:       base,
@@ -395,7 +393,11 @@ func (t *DevLogTool) handleAppend(parameters map[string]any) tools.ToolResponse 
 	entry := NewDevLogEntry(category, content, metadata)
 	t.store.Append(entry)
 	if err := t.persist(); err != nil {
-		panic(err)
+		return tools.Error(
+			fmt.Sprintf("日志持久化失败：%v", err),
+			tools.ToolErrorCodeInternalError,
+			nil,
+		)
 	}
 
 	displayContent := content
@@ -463,7 +465,11 @@ func (t *DevLogTool) handleClear() tools.ToolResponse {
 	t.store.Entries = []DevLogEntry{}
 	t.store.UpdatedAt = nowPythonISOTime()
 	if err := t.persist(); err != nil {
-		panic(err)
+		return tools.Error(
+			fmt.Sprintf("日志持久化失败：%v", err),
+			tools.ToolErrorCodeInternalError,
+			nil,
+		)
 	}
 
 	return tools.Success(

@@ -44,7 +44,7 @@ func NewHelloAgentsLLM(model, apiKey, baseURL string, temperature float64, maxTo
 	} else if s := os.Getenv("LLM_TIMEOUT"); s != "" {
 		parsed, err := strconv.Atoi(s)
 		if err != nil {
-			panic(err)
+			return nil, NewHelloAgentsException(fmt.Sprintf("LLM_TIMEOUT 环境变量格式错误: %v", err))
 		}
 		timeoutValue = parsed
 	}

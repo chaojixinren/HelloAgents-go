@@ -56,23 +56,19 @@ func TestToolResponseFromMapAcceptsStringMapError(t *testing.T) {
 	}
 }
 
-func TestToolResponseFromJSONPanicsOnInvalidJSONLikePython(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("ToolResponseFromJSON() should panic on invalid json")
-		}
-	}()
-	_ = ToolResponseFromJSON("not-json")
+func TestToolResponseFromJSONReturnsErrorOnInvalidJSON(t *testing.T) {
+	resp := ToolResponseFromJSON("not-json")
+	if resp.Status != ToolStatusError {
+		t.Fatalf("ToolResponseFromJSON() status = %q, want error on invalid json", resp.Status)
+	}
 }
 
-func TestToolResponseFromMapPanicsOnInvalidStatusLikePythonEnum(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("ToolResponseFromMap() should panic on invalid status")
-		}
-	}()
-	_ = ToolResponseFromMap(map[string]any{
+func TestToolResponseFromMapDefaultsToErrorOnInvalidStatus(t *testing.T) {
+	resp := ToolResponseFromMap(map[string]any{
 		"status": "unknown",
 		"text":   "x",
 	})
+	if resp.Status != ToolStatusError {
+		t.Fatalf("ToolResponseFromMap() status = %q, want error on invalid status", resp.Status)
+	}
 }

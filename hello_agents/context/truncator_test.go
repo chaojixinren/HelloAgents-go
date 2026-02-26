@@ -40,11 +40,9 @@ func TestTruncatorKeepsExplicitZeroLimits(t *testing.T) {
 	}
 }
 
-func TestTruncatorEmptyOutputDirPanicsLikePythonMakedirs(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("NewObservationTruncator should panic when output_dir is empty")
-		}
-	}()
-	_ = NewObservationTruncator(10, 10, "head", "")
+func TestTruncatorEmptyOutputDirDoesNotPanic(t *testing.T) {
+	tr := NewObservationTruncator(10, 10, "head", "")
+	if tr == nil {
+		t.Fatalf("NewObservationTruncator returned nil for empty output_dir")
+	}
 }

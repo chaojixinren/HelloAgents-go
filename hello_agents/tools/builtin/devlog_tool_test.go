@@ -68,8 +68,8 @@ func TestDevLogRunReturnsInternalErrorWhenPersistFails(t *testing.T) {
 	if resp.ErrorInfo == nil || resp.ErrorInfo["code"] != tools.ToolErrorCodeInternalError {
 		t.Fatalf("error = %#v, want INTERNAL_ERROR", resp.ErrorInfo)
 	}
-	if !strings.HasPrefix(resp.Text, "DevLog 操作失败：") {
-		t.Fatalf("text = %q, want internal failure prefix", resp.Text)
+	if !strings.HasPrefix(resp.Text, "日志持久化失败：") {
+		t.Fatalf("text = %q, want persist failure prefix", resp.Text)
 	}
 }
 
@@ -88,17 +88,15 @@ func TestDevLogKeepsEmptySessionAndAgentNamesLikePython(t *testing.T) {
 	}
 }
 
-func TestNewDevLogToolPanicsWhenPersistenceDirCannotBeCreatedLikePython(t *testing.T) {
+func TestNewDevLogToolDoesNotPanicWhenPersistenceDirCannotBeCreated(t *testing.T) {
 	tmp := t.TempDir()
 	blocker := filepath.Join(tmp, "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
-	defer func() {
-		if recover() == nil {
-			t.Fatalf("NewDevLogTool should panic when persistence dir cannot be created")
-		}
-	}()
-	_ = NewDevLogTool("s", "a", blocker, "logs")
+	tool := NewDevLogTool("s", "a", blocker, "logs")
+	if tool == nil {
+		t.Fatalf("NewDevLogTool returned nil when persistence dir cannot be created")
+	}
 }
