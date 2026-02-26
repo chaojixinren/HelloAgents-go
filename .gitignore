@@ -12,6 +12,7 @@ bin/
 
 # 测试与覆盖率
 coverage.out
+coverage*.out
 coverage.html
 *.coverprofile
 
@@ -23,6 +24,7 @@ hello_agents/agents/tool-output/
 hello_agents/core/tool-output/
 tests/memory/
 tests/tool-output/
+tests/todos/
 
 # 依赖
 vendor/
