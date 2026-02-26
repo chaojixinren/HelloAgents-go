@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"helloagents-go/hello_agents/logging"
 	"reflect"
 	"sort"
 	"time"
@@ -131,7 +133,7 @@ func (s *SessionStore) ListSessions() ([]map[string]any, error) {
 		fullpath := filepath.Join(s.SessionDir, entry.Name())
 		record, err := s.Load(fullpath)
 		if err != nil {
-			fmt.Printf("⚠️ 警告：无法读取 %s: %v\n", fullpath, err)
+			logging.Warn("无法读取会话文件", "path", fullpath, "error", err)
 			continue
 		}
 

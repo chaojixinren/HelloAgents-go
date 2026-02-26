@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"helloagents-go/hello_agents/logging"
 )
 
 // TraceLogger provides dual-format auditing trace output (JSONL + HTML).
@@ -192,7 +194,7 @@ func (l *TraceLogger) Finalize() error {
 	}
 
 	l.closed = true
-	fmt.Printf("✅ Trace 已保存:\n   JSONL: %s\n   HTML:  %s\n", l.JSONLPath, l.HTMLPath)
+	logging.Info("Trace 已保存", "jsonl", l.JSONLPath, "html", l.HTMLPath)
 	return nil
 }
 

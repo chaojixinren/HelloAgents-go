@@ -16,6 +16,7 @@ import (
 	"time"
 
 	haContext "helloagents-go/hello_agents/context"
+	"helloagents-go/hello_agents/logging"
 	"helloagents-go/hello_agents/observability"
 	"helloagents-go/hello_agents/skills"
 	"helloagents-go/hello_agents/tools"
@@ -359,7 +360,7 @@ func (a *BaseAgent) GenerateSmartSummary(history []Message) string {
 
 	summaryLLM, err := a.getSummaryLLM()
 	if err != nil {
-		fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
+		logging.Warn("智能摘要生成失败，使用简单摘要", "error", err)
 		return a.GenerateSimpleSummary(history)
 	}
 
@@ -374,7 +375,7 @@ func (a *BaseAgent) GenerateSmartSummary(history []Message) string {
 		},
 	)
 	if err != nil {
-		fmt.Printf("⚠️ 智能摘要生成失败: %v，使用简单摘要\n", err)
+		logging.Warn("智能摘要LLM调用失败，使用简单摘要", "error", err)
 		return a.GenerateSimpleSummary(history)
 	}
 
@@ -746,7 +747,7 @@ func (a *BaseAgent) AutoSave() {
 		"session-auto",
 	)
 	if err != nil && a.Config.Debug {
-		fmt.Printf("⚠️ 自动保存失败: %v\n", err)
+		logging.Warn("自动保存失败", "error", err)
 	}
 }
 
@@ -786,10 +787,7 @@ func (a *BaseAgent) LoadSession(filepath string, checkConsistency bool) error {
 				}
 			}
 			if len(warnings) > 0 {
-				fmt.Println("⚠️ 环境配置不一致：")
-				for _, warning := range warnings {
-					fmt.Printf("  - %s\n", warning)
-				}
+				logging.Warn("环境配置不一致", "warnings", warnings)
 				if a.TraceLogger != nil {
 					a.TraceLogger.LogEvent("session_config_warning", map[string]any{
 						"warnings": warnings,
@@ -800,8 +798,7 @@ func (a *BaseAgent) LoadSession(filepath string, checkConsistency bool) error {
 
 		schemaCheck := a.SessionStore.CheckToolSchemaConsistency(record.ToolSchemaHash, a.ComputeToolSchemaHash())
 		if changed, _ := schemaCheck["changed"].(bool); changed {
-			fmt.Println("⚠️ 工具定义已变化")
-			fmt.Printf("  建议：%v\n", schemaCheck["recommendation"])
+			logging.Warn("工具定义已变化", "recommendation", schemaCheck["recommendation"])
 			if a.TraceLogger != nil {
 				a.TraceLogger.LogEvent("session_tool_schema_warning", schemaCheck, nil)
 			}
@@ -824,7 +821,7 @@ func (a *BaseAgent) LoadSession(filepath string, checkConsistency bool) error {
 			a.ToolRegistry.CacheReadMetadata(filePath, metadata)
 		}
 	}
-	fmt.Printf("✅ 会话已恢复：%s\n", record.SessionID)
+	logging.Info("会话已恢复", "session_id", record.SessionID)
 	return nil
 }
 
