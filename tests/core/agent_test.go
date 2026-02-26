@@ -346,7 +346,7 @@ func TestBaseAgentCreateLightLLMUsesEnvLikePython(t *testing.T) {
 func TestBaseAgentStringUsesModelLikePython(t *testing.T) {
 	agent := &core.BaseAgent{
 		Name: "tester",
-		LLM: core.NewLLMFromAdapter("gpt-test", "", "", 0, 0, nil),
+		LLM:  core.NewLLMFromAdapter("gpt-test", "", "", 0, 0, nil),
 	}
 	agent.LLM.Provider = "mock"
 	if got := agent.String(); got != "Agent(name=tester, model=gpt-test)" {
