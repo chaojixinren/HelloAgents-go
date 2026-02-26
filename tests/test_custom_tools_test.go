@@ -13,10 +13,14 @@ import (
 
 type panicRunWithTimingTool struct{}
 
-func (t *panicRunWithTimingTool) GetName() string                                  { return "panic_tool" }
-func (t *panicRunWithTimingTool) GetDescription() string                           { return "panic tool" }
-func (t *panicRunWithTimingTool) GetParameters() []tools.ToolParameter             { return []tools.ToolParameter{} }
-func (t *panicRunWithTimingTool) Run(parameters map[string]any) tools.ToolResponse { return tools.Success("ok", nil, nil, nil) }
+func (t *panicRunWithTimingTool) GetName() string        { return "panic_tool" }
+func (t *panicRunWithTimingTool) GetDescription() string { return "panic tool" }
+func (t *panicRunWithTimingTool) GetParameters() []tools.ToolParameter {
+	return []tools.ToolParameter{}
+}
+func (t *panicRunWithTimingTool) Run(parameters map[string]any) tools.ToolResponse {
+	return tools.Success("ok", nil, nil, nil)
+}
 func (t *panicRunWithTimingTool) RunWithTiming(parameters map[string]any) tools.ToolResponse {
 	panic("boom")
 }
