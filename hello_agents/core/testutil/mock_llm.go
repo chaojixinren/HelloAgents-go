@@ -9,13 +9,13 @@ import (
 
 // MockLLMAdapter returns canned responses without HTTP calls.
 type MockLLMAdapter struct {
-	Responses      []string
-	ToolResponses  []map[string]any
-	InvokedCount   int
-	LastMessages   []map[string]any
-	StreamChunks   []string
-	FailOnInvoke   bool
-	FailOnNthCall  int
+	Responses     []string
+	ToolResponses []map[string]any
+	InvokedCount  int
+	LastMessages  []map[string]any
+	StreamChunks  []string
+	FailOnInvoke  bool
+	FailOnNthCall int
 }
 
 func (m *MockLLMAdapter) Invoke(messages []map[string]any, kwargs map[string]any) (core.LLMResponse, error) {

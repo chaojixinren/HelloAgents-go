@@ -9,13 +9,13 @@ import (
 // without making HTTP calls. It supports both simple text responses
 // and tool-calling flows.
 type MockLLMAdapter struct {
-	Responses      []string
-	ToolResponses  []map[string]any
-	InvokedCount   int
-	LastMessages   []map[string]any
-	StreamChunks   []string
-	FailOnInvoke   bool
-	FailOnNthCall  int
+	Responses     []string
+	ToolResponses []map[string]any
+	InvokedCount  int
+	LastMessages  []map[string]any
+	StreamChunks  []string
+	FailOnInvoke  bool
+	FailOnNthCall int
 }
 
 func NewMockLLMAdapter(responses ...string) *MockLLMAdapter {

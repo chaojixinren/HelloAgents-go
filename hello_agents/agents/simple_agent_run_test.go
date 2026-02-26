@@ -216,7 +216,7 @@ func (t *mockCalculatorTool) Run(parameters map[string]any) tools.ToolResponse {
 }
 
 func (t *mockCalculatorTool) GetName() string        { return "calculator" }
-func (t *mockCalculatorTool) GetDescription() string  { return "计算数学表达式" }
+func (t *mockCalculatorTool) GetDescription() string { return "计算数学表达式" }
 func (t *mockCalculatorTool) GetParameters() []tools.ToolParameter {
 	return []tools.ToolParameter{
 		{Name: "expression", Type: "string", Description: "数学表达式", Required: true},
