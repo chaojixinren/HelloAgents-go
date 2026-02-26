@@ -1,4 +1,4 @@
-package tools_test
+package tests_test
 
 import (
 	"testing"
@@ -6,6 +6,10 @@ import (
 
 	"helloagents-go/hello_agents/tools"
 )
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
 
 type dummyCircuitTool struct {
 	tools.BaseTool
@@ -29,6 +33,10 @@ func (t *dummyCircuitTool) Run(parameters map[string]any) tools.ToolResponse {
 func (t *dummyCircuitTool) RunWithTiming(parameters map[string]any) tools.ToolResponse {
 	return t.Run(parameters)
 }
+
+// ---------------------------------------------------------------------------
+// CircuitBreaker tests (from tools/circuit_breaker_test.go)
+// ---------------------------------------------------------------------------
 
 func TestCircuitBreakerFailureThreshold(t *testing.T) {
 	cb := tools.NewCircuitBreaker(3, 300, true)

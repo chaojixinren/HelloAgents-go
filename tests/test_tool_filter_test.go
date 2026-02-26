@@ -1,10 +1,14 @@
-package tools_test
+package tests_test
 
 import (
 	"testing"
 
 	"helloagents-go/hello_agents/tools"
 )
+
+// ---------------------------------------------------------------------------
+// ToolFilter tests (from tools/tool_filter_test.go)
+// ---------------------------------------------------------------------------
 
 func TestReadOnlyFilter(t *testing.T) {
 	filter := tools.NewReadOnlyFilter(nil)

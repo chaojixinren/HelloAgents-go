@@ -1,10 +1,14 @@
-package core_test
+package tests_test
 
 import (
 	"testing"
 
 	"helloagents-go/hello_agents/core"
 )
+
+// ---------------------------------------------------------------------------
+// StreamBuffer / StreamEvent tests (from core/streaming_test.go)
+// ---------------------------------------------------------------------------
 
 func TestStreamBufferKeepsExplicitZeroSizeLikePython(t *testing.T) {
 	buffer := core.NewStreamBuffer(0)

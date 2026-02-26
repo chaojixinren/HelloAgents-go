@@ -1,4 +1,4 @@
-package builtin_test
+package tests_test
 
 import (
 	"os"
@@ -9,6 +9,10 @@ import (
 	"helloagents-go/hello_agents/tools"
 	"helloagents-go/hello_agents/tools/builtin"
 )
+
+// ---------------------------------------------------------------------------
+// DevLogTool tests (from tools/builtin/devlog_tool_test.go)
+// ---------------------------------------------------------------------------
 
 func TestDevLogAppendAllowsWhitespaceContentLikePython(t *testing.T) {
 	tool := builtin.NewDevLogTool("session-1", "Agent", t.TempDir(), "memory/devlogs")

@@ -1,4 +1,4 @@
-package builtin_test
+package tests_test
 
 import (
 	"os"
@@ -9,6 +9,10 @@ import (
 	"helloagents-go/hello_agents/tools"
 	"helloagents-go/hello_agents/tools/builtin"
 )
+
+// ---------------------------------------------------------------------------
+// TodoWriteTool tests (from tools/builtin/todowrite_tool_test.go)
+// ---------------------------------------------------------------------------
 
 func TestTodoWriteRejectsMissingContentField(t *testing.T) {
 	tool := builtin.NewTodoWriteTool(t.TempDir(), "memory/todos")

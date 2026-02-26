@@ -1,27 +1,20 @@
-package core_test
+package tests_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"helloagents-go/hello_agents/core"
 	"helloagents-go/hello_agents/tools"
 )
 
+// ---------------------------------------------------------------------------
+// helpers (agent_test.go tool types used by summary/compression tests)
+// ---------------------------------------------------------------------------
+
 type typedParamTool struct {
-	tools.BaseTool
-}
-
-type panicParametersTool struct {
-	tools.BaseTool
-}
-
-type panicExecuteTool struct {
-	tools.BaseTool
-}
-
-type noopTool struct {
 	tools.BaseTool
 }
 
@@ -50,6 +43,10 @@ func newTypedParamTool() *typedParamTool {
 	return &typedParamTool{BaseTool: base}
 }
 
+type panicParametersTool struct {
+	tools.BaseTool
+}
+
 func newPanicParametersTool() *panicParametersTool {
 	base := tools.NewBaseTool("panic_params", "panic params tool", false)
 	return &panicParametersTool{BaseTool: base}
@@ -59,152 +56,94 @@ func (t *panicParametersTool) GetParameters() []tools.ToolParameter {
 	panic("boom")
 }
 
+type panicExecuteTool struct {
+	tools.BaseTool
+}
+
 func newPanicExecuteTool() *panicExecuteTool {
 	base := tools.NewBaseTool("panic_execute", "panic execute tool", false)
 	return &panicExecuteTool{BaseTool: base}
-}
-
-func newNoopTool(name string) *noopTool {
-	base := tools.NewBaseTool(name, "noop", false)
-	return &noopTool{BaseTool: base}
 }
 
 func (t *panicExecuteTool) RunWithTiming(parameters map[string]any) tools.ToolResponse {
 	panic("boom")
 }
 
-func (t *noopTool) Run(parameters map[string]any) tools.ToolResponse {
-	return tools.Success("ok", nil, nil, nil)
-}
+// ---------------------------------------------------------------------------
+// Message tests (from core/message_test.go)
+// ---------------------------------------------------------------------------
 
-func TestBaseAgentArunUsesRunDelegate(t *testing.T) {
-	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
-	llm.Provider = "mock"
-	cfg := core.DefaultConfig()
-	cfg.TraceEnabled = false
-	cfg.SessionEnabled = false
-	cfg.SkillsEnabled = false
-	agent, err := core.NewBaseAgent("tester", llm, "", &cfg, nil)
-	if err != nil {
-		t.Fatalf("NewBaseAgent() error = %v", err)
-	}
-
-	called := false
-	agent.SetRunDelegate(func(inputText string, kwargs map[string]any) (string, error) {
-		called = true
-		return "delegated:" + inputText, nil
+func TestMessageFromMapParsesPythonISOFormatTimestamp(t *testing.T) {
+	msg, err := core.MessageFromMap(map[string]any{
+		"content":   "hello",
+		"role":      "user",
+		"timestamp": "2026-02-24T12:34:56.123456",
 	})
-
-	result, err := agent.Arun("hello", core.Hooks{}, nil)
 	if err != nil {
-		t.Fatalf("Arun() error = %v", err)
+		t.Fatalf("MessageFromMap() error = %v", err)
 	}
-	if !called {
-		t.Fatalf("Arun() did not invoke run delegate")
+	if got := msg.Timestamp.Year(); got != 2026 {
+		t.Fatalf("timestamp year = %d, want 2026", got)
 	}
-	if result != "delegated:hello" {
-		t.Fatalf("Arun() result = %q, want %q", result, "delegated:hello")
+	if got := int(msg.Timestamp.Month()); got != 2 {
+		t.Fatalf("timestamp month = %d, want 2", got)
+	}
+	if got := msg.Timestamp.Day(); got != 24 {
+		t.Fatalf("timestamp day = %d, want 24", got)
 	}
 }
 
-func TestBaseAgentArunStreamUsesRunDelegate(t *testing.T) {
-	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
-	llm.Provider = "mock"
+func TestMessageToMapUsesPythonISOFormat(t *testing.T) {
+	msg := core.Message{
+		Content:   "hello",
+		Role:      core.MessageRoleUser,
+		Timestamp: time.Date(2026, 2, 24, 12, 34, 56, 123456000, time.UTC),
+		Metadata:  map[string]any{},
+	}
+
+	data := msg.ToMap()
+	got, _ := data["timestamp"].(string)
+	want := "2026-02-24T12:34:56.123456"
+	if got != want {
+		t.Fatalf("timestamp = %q, want %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Summary / compression from core/agent_test.go
+// ---------------------------------------------------------------------------
+
+func TestBaseAgentGetSummaryLLMUsesSummaryConfigAndEnv(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "env-key")
+	t.Setenv("LLM_BASE_URL", "https://env-base.example/v1")
+
 	cfg := core.DefaultConfig()
 	cfg.TraceEnabled = false
 	cfg.SessionEnabled = false
 	cfg.SkillsEnabled = false
-	agent, err := core.NewBaseAgent("tester", llm, "", &cfg, nil)
+	cfg.SummaryLLMProvider = "deepseek"
+	cfg.SummaryLLMModel = "deepseek-chat"
+
+	mainLLM := core.NewLLMFromAdapter("main-model", "main-key", "https://main-base.example/v1", 0, 0.9, nil)
+	mainLLM.Provider = "openai"
+
+	agent, err := core.NewBaseAgent("tester", mainLLM, "", &cfg, nil)
 	if err != nil {
 		t.Fatalf("NewBaseAgent() error = %v", err)
 	}
 
-	agent.SetRunDelegate(func(inputText string, kwargs map[string]any) (string, error) {
-		return "stream:" + inputText, nil
-	})
-
-	events := agent.ArunStream("hello", nil)
-	finishSeen := false
-	for event := range events {
-		if event.Type != core.AgentFinish {
-			continue
-		}
-		finishSeen = true
-		if got := event.Data["result"]; got != "stream:hello" {
-			t.Fatalf("AgentFinish result = %v, want %q", got, "stream:hello")
-		}
-	}
-	if !finishSeen {
-		t.Fatalf("AgentFinish event not emitted")
-	}
-}
-
-func TestBaseAgentRunAsSubagentMaxStepsOverrideAndRestore(t *testing.T) {
-	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
-	llm.Provider = "mock"
-	cfg := core.DefaultConfig()
-	cfg.TraceEnabled = false
-	cfg.SessionEnabled = false
-	cfg.SkillsEnabled = false
-
-	agent, err := core.NewBaseAgent("tester", llm, "", &cfg, nil)
+	summaryLLM, err := agent.ExportGetSummaryLLM()
 	if err != nil {
-		t.Fatalf("NewBaseAgent() error = %v", err)
+		t.Fatalf("getSummaryLLM() error = %v", err)
 	}
-
-	maxSteps := 5
-	agent.SetMaxStepAccessors(
-		func() int { return maxSteps },
-		func(v int) { maxSteps = v },
-	)
-	agent.SetRunDelegate(func(inputText string, kwargs map[string]any) (string, error) {
-		if maxSteps != 0 {
-			t.Fatalf("run() saw maxSteps = %d, want 0 during subagent run", maxSteps)
-		}
-		return "ok", nil
-	})
-
-	zero := 0
-	result := agent.RunAsSubagent("task", nil, true, &zero)
-	if success, _ := result["success"].(bool); !success {
-		t.Fatalf("RunAsSubagent() success = %v, want true", result["success"])
+	if summaryLLM.Model != "deepseek-chat" {
+		t.Fatalf("summary model = %q, want %q", summaryLLM.Model, "deepseek-chat")
 	}
-	if maxSteps != 5 {
-		t.Fatalf("maxSteps after restore = %d, want 5", maxSteps)
+	if summaryLLM.APIKey != "env-key" {
+		t.Fatalf("summary APIKey = %q, want env key", summaryLLM.APIKey)
 	}
-}
-
-func TestBaseAgentGetAgentConfigIncludesMaxStepsOnlyWhenEnabled(t *testing.T) {
-	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
-	llm.Provider = "mock"
-	cfg := core.DefaultConfig()
-	cfg.TraceEnabled = false
-	cfg.SessionEnabled = false
-	cfg.SkillsEnabled = false
-
-	agent, err := core.NewBaseAgent("tester", llm, "", &cfg, nil)
-	if err != nil {
-		t.Fatalf("NewBaseAgent() error = %v", err)
-	}
-
-	agent.MaxSteps = 9
-	configWithoutMax := agent.GetAgentConfig()
-	if _, exists := configWithoutMax["max_steps"]; exists {
-		t.Fatalf("GetAgentConfig() should not include max_steps when accessor not enabled")
-	}
-
-	maxSteps := 0
-	agent.SetMaxStepAccessors(
-		func() int { return maxSteps },
-		func(v int) { maxSteps = v },
-	)
-	configWithMax := agent.GetAgentConfig()
-	got, exists := configWithMax["max_steps"]
-	if !exists {
-		t.Fatalf("GetAgentConfig() missing max_steps when accessor enabled")
-	}
-	if got != 0 {
-		t.Fatalf("GetAgentConfig() max_steps = %v, want 0", got)
+	if summaryLLM.BaseURL != "https://env-base.example/v1" {
+		t.Fatalf("summary BaseURL = %q, want env base", summaryLLM.BaseURL)
 	}
 }
 
@@ -354,40 +293,6 @@ func TestBaseAgentStringUsesModelLikePython(t *testing.T) {
 	}
 }
 
-func TestBaseAgentGetSummaryLLMUsesSummaryConfigAndEnv(t *testing.T) {
-	t.Setenv("LLM_API_KEY", "env-key")
-	t.Setenv("LLM_BASE_URL", "https://env-base.example/v1")
-
-	cfg := core.DefaultConfig()
-	cfg.TraceEnabled = false
-	cfg.SessionEnabled = false
-	cfg.SkillsEnabled = false
-	cfg.SummaryLLMProvider = "deepseek"
-	cfg.SummaryLLMModel = "deepseek-chat"
-
-	mainLLM := core.NewLLMFromAdapter("main-model", "main-key", "https://main-base.example/v1", 0, 0.9, nil)
-	mainLLM.Provider = "openai"
-
-	agent, err := core.NewBaseAgent("tester", mainLLM, "", &cfg, nil)
-	if err != nil {
-		t.Fatalf("NewBaseAgent() error = %v", err)
-	}
-
-	summaryLLM, err := agent.ExportGetSummaryLLM()
-	if err != nil {
-		t.Fatalf("getSummaryLLM() error = %v", err)
-	}
-	if summaryLLM.Model != "deepseek-chat" {
-		t.Fatalf("summary model = %q, want %q", summaryLLM.Model, "deepseek-chat")
-	}
-	if summaryLLM.APIKey != "env-key" {
-		t.Fatalf("summary APIKey = %q, want env key", summaryLLM.APIKey)
-	}
-	if summaryLLM.BaseURL != "https://env-base.example/v1" {
-		t.Fatalf("summary BaseURL = %q, want env base", summaryLLM.BaseURL)
-	}
-}
-
 func TestExtractToolsFromHistoryKeepsEmptyFunctionNameLikePythonSet(t *testing.T) {
 	agent := &core.BaseAgent{}
 	history := []core.Message{
@@ -468,7 +373,7 @@ func TestLoadSessionKeepsExistingReadCacheWhenSavedReadCacheIsEmpty(t *testing.T
 	}
 }
 
-func TestRunAsSubagentKeepsMainHistoryIsolated(t *testing.T) {
+func TestBaseAgentGetAgentConfigIncludesMaxStepsOnlyWhenEnabled(t *testing.T) {
 	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
 	llm.Provider = "mock"
 	cfg := core.DefaultConfig()
@@ -481,61 +386,24 @@ func TestRunAsSubagentKeepsMainHistoryIsolated(t *testing.T) {
 		t.Fatalf("NewBaseAgent() error = %v", err)
 	}
 
-	agent.AddMessage(core.NewMessage("main-user", core.MessageRoleUser, nil))
-	agent.AddMessage(core.NewMessage("main-assistant", core.MessageRoleAssistant, nil))
-	original := agent.GetHistory()
-
-	agent.SetRunDelegate(func(inputText string, kwargs map[string]any) (string, error) {
-		agent.AddMessage(core.NewMessage(inputText, core.MessageRoleUser, nil))
-		agent.AddMessage(core.NewMessage("subagent-result", core.MessageRoleAssistant, nil))
-		return "subagent-result", nil
-	})
-
-	result := agent.RunAsSubagent("sub-task", nil, true, nil)
-	if success, _ := result["success"].(bool); !success {
-		t.Fatalf("RunAsSubagent() success = %v, want true", result["success"])
+	agent.MaxSteps = 9
+	configWithoutMax := agent.GetAgentConfig()
+	if _, exists := configWithoutMax["max_steps"]; exists {
+		t.Fatalf("GetAgentConfig() should not include max_steps when accessor not enabled")
 	}
 
-	finalHistory := agent.GetHistory()
-	if len(finalHistory) != len(original) {
-		t.Fatalf("history len after subagent = %d, want %d", len(finalHistory), len(original))
+	maxSteps := 0
+	agent.SetMaxStepAccessors(
+		func() int { return maxSteps },
+		func(v int) { maxSteps = v },
+	)
+	configWithMax := agent.GetAgentConfig()
+	got, exists := configWithMax["max_steps"]
+	if !exists {
+		t.Fatalf("GetAgentConfig() missing max_steps when accessor enabled")
 	}
-	if finalHistory[0].Content != "main-user" || finalHistory[1].Content != "main-assistant" {
-		t.Fatalf("main history should be restored, got %#v", finalHistory)
-	}
-}
-
-func TestRunAsSubagentRestoresToolsAfterFilter(t *testing.T) {
-	llm := core.NewLLMFromAdapter("mock-model", "", "", 0, 0, nil)
-	llm.Provider = "mock"
-	cfg := core.DefaultConfig()
-	cfg.TraceEnabled = false
-	cfg.SessionEnabled = false
-	cfg.SkillsEnabled = false
-
-	registry := tools.NewToolRegistry(nil)
-	registry.RegisterTool(newNoopTool("Read"), false)
-	registry.RegisterTool(newNoopTool("Write"), false)
-	registry.RegisterTool(newNoopTool("Bash"), false)
-
-	agent, err := core.NewBaseAgent("tester", llm, "", &cfg, registry)
-	if err != nil {
-		t.Fatalf("NewBaseAgent() error = %v", err)
-	}
-	agent.SetRunDelegate(func(inputText string, kwargs map[string]any) (string, error) {
-		return "ok", nil
-	})
-
-	filter := tools.NewReadOnlyFilter(nil)
-	_ = agent.RunAsSubagent("task", filter, true, nil)
-
-	names := registry.ListTools()
-	want := map[string]bool{"Read": true, "Write": true, "Bash": true}
-	for _, name := range names {
-		delete(want, name)
-	}
-	if len(want) != 0 {
-		t.Fatalf("tools should be fully restored, missing: %#v", want)
+	if got != 0 {
+		t.Fatalf("GetAgentConfig() max_steps = %v, want 0", got)
 	}
 }
 

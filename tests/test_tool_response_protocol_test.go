@@ -1,4 +1,4 @@
-package tools_test
+package tests_test
 
 import (
 	"encoding/json"
@@ -6,6 +6,10 @@ import (
 
 	"helloagents-go/hello_agents/tools"
 )
+
+// ---------------------------------------------------------------------------
+// ToolResponse tests (from tools/response_test.go)
+// ---------------------------------------------------------------------------
 
 func TestToolResponseHelpers(t *testing.T) {
 	success := tools.Success("ok", map[string]any{"value": 42})

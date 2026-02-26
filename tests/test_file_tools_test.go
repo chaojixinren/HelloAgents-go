@@ -1,4 +1,4 @@
-package builtin_test
+package tests_test
 
 import (
 	"os"
@@ -10,6 +10,10 @@ import (
 	"helloagents-go/hello_agents/tools"
 	"helloagents-go/hello_agents/tools/builtin"
 )
+
+// ---------------------------------------------------------------------------
+// File tools tests (from tools/builtin/file_tools_test.go)
+// ---------------------------------------------------------------------------
 
 func TestWriteEditMultiEditResolvePathNormalizesBackslashes(t *testing.T) {
 	root := t.TempDir()

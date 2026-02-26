@@ -1,4 +1,4 @@
-package core_test
+package tests_test
 
 import (
 	"path/filepath"
@@ -7,6 +7,10 @@ import (
 
 	"helloagents-go/hello_agents/core"
 )
+
+// ---------------------------------------------------------------------------
+// SessionStore tests (from core/session_store_test.go)
+// ---------------------------------------------------------------------------
 
 func TestPythonValueEqualMatchesPythonLikeSemantics(t *testing.T) {
 	cases := []struct {

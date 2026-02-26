@@ -1,4 +1,4 @@
-package observability_test
+package tests_test
 
 import (
 	"os"
@@ -6,6 +6,10 @@ import (
 
 	"helloagents-go/hello_agents/observability"
 )
+
+// ---------------------------------------------------------------------------
+// TraceLogger tests (from observability/trace_logger_test.go)
+// ---------------------------------------------------------------------------
 
 func TestComputeStatsTracksStepTokenAndToolCallMetrics(t *testing.T) {
 	logger, err := observability.NewTraceLogger(t.TempDir(), false, false)
