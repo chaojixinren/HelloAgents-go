@@ -135,8 +135,9 @@ func (t *ReadTool) Run(parameters map[string]any) tools.ToolResponse {
 		})
 	}
 
+	summary := fmt.Sprintf("读取 %d 行（共 %d 行，%d 字节）\n\n%s", len(lines), totalLines, fileSizeBytes, content)
 	return tools.Success(
-		fmt.Sprintf("读取 %d 行（共 %d 行，%d 字节）", len(lines), totalLines, fileSizeBytes),
+		summary,
 		map[string]any{
 			"content":         content,
 			"lines":           len(lines),
