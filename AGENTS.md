@@ -26,8 +26,10 @@ This is a **Go library/SDK** (HelloAgents-Go) — there is no web server or data
 
 - Go 1.22 is required (per `go.mod`). The VM ships with Go 1.22.2.
 - All tests are pure unit tests — no external services (databases, LLM APIs) are needed to run them. Agent tests use `core/testutil.MockLLMAdapter`.
+- Tests live in `tests/` at the repo root as external test packages (`_test` suffix). Source packages contain `testing_helpers.go` files that expose unexported symbols for the external tests.
 - To use agents at runtime (not tests), you need `LLM_API_KEY`, `LLM_MODEL_ID`, and `LLM_BASE_URL` env vars — see `.env.example`.
 - The `hello_agents/logging` package wraps `log/slog` — all library logging goes through it; use `logging.SetLogger()` to override.
 - A `Makefile` is available with standard targets. CI runs via `.github/workflows/ci.yml`.
+- `gofmt -l .` reports some pre-existing formatting issues in `example/` files — these are not test failures.
 - Development conventions are documented in `docs/development-guide.md` and `docs/contributing.md`.
-- Examples are in `examples/` (simple, react, streaming) — they require LLM API keys to run.
+- Examples are in `example/` — they require LLM API keys to run.
