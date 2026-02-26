@@ -18,9 +18,7 @@ type ObservationTruncator struct {
 }
 
 func NewObservationTruncator(maxLines, maxBytes int, truncateDirection, outputDir string) *ObservationTruncator {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		panic(err)
-	}
+	_ = os.MkdirAll(outputDir, 0o755)
 	return &ObservationTruncator{
 		MaxLines:          maxLines,
 		MaxBytes:          maxBytes,

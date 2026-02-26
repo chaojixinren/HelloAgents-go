@@ -70,7 +70,7 @@ func ToolResponseFromMap(data map[string]any) ToolResponse {
 		case ToolStatusSuccess, ToolStatusPartial, ToolStatusError:
 			resp.Status = ToolStatus(s)
 		default:
-			panic(fmt.Errorf("invalid ToolStatus: %s", s))
+			resp.Status = ToolStatusError
 		}
 	}
 	if text, ok := data["text"].(string); ok {
@@ -109,7 +109,7 @@ func ToolResponseFromDict(data map[string]any) ToolResponse {
 func ToolResponseFromJSON(jsonStr string) ToolResponse {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
-		panic(err)
+		return Error(fmt.Sprintf("JSON 解析失败: %v", err), ToolErrorCodeInvalidFormat, nil)
 	}
 	return ToolResponseFromMap(payload)
 }

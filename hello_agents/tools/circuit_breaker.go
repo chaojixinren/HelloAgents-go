@@ -1,9 +1,10 @@
 package tools
 
 import (
-	"fmt"
 	"sync"
 	"time"
+
+	"helloagents-go/hello_agents/logging"
 )
 
 // CircuitBreaker prevents endless retries on repeatedly failing tools.
@@ -62,7 +63,7 @@ func (c *CircuitBreaker) onFailure(toolName string) {
 	c.failureCounts[toolName]++
 	if c.failureCounts[toolName] >= c.FailureThreshold {
 		c.openTimestamps[toolName] = time.Now()
-		fmt.Printf("🔴 Circuit Breaker: 工具 '%s' 已熔断（连续 %d 次失败）\n", toolName, c.failureCounts[toolName])
+		logging.Warn("Circuit Breaker: 工具已熔断", "tool", toolName, "failures", c.failureCounts[toolName])
 	}
 }
 
@@ -79,7 +80,7 @@ func (c *CircuitBreaker) Open(toolName string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.openTimestamps[toolName] = time.Now()
-	fmt.Printf("🔴 Circuit Breaker: 工具 '%s' 已手动熔断\n", toolName)
+	logging.Warn("Circuit Breaker: 工具已手动熔断", "tool", toolName)
 }
 
 func (c *CircuitBreaker) Close(toolName string) {
@@ -87,7 +88,7 @@ func (c *CircuitBreaker) Close(toolName string) {
 	defer c.mu.Unlock()
 	c.failureCounts[toolName] = 0
 	delete(c.openTimestamps, toolName)
-	fmt.Printf("🟢 Circuit Breaker: 工具 '%s' 已恢复\n", toolName)
+	logging.Info("Circuit Breaker: 工具已恢复", "tool", toolName)
 }
 
 func (c *CircuitBreaker) GetStatus(toolName string) map[string]any {

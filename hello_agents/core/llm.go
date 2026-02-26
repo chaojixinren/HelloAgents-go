@@ -44,7 +44,7 @@ func NewHelloAgentsLLM(model, apiKey, baseURL string, temperature float64, maxTo
 	} else if s := os.Getenv("LLM_TIMEOUT"); s != "" {
 		parsed, err := strconv.Atoi(s)
 		if err != nil {
-			panic(err)
+			return nil, NewHelloAgentsException(fmt.Sprintf("LLM_TIMEOUT 环境变量格式错误: %v", err))
 		}
 		timeoutValue = parsed
 	}
@@ -193,4 +193,16 @@ func (l *HelloAgentsLLM) Validate() error {
 		return fmt.Errorf("llm client is not fully configured")
 	}
 	return nil
+}
+
+// NewLLMFromAdapter creates a HelloAgentsLLM with a custom adapter for testing.
+func NewLLMFromAdapter(model, apiKey, baseURL string, timeout int, temperature float64, adapter BaseLLMAdapter) *HelloAgentsLLM {
+	return &HelloAgentsLLM{
+		Model:       model,
+		APIKey:      apiKey,
+		BaseURL:     baseURL,
+		Timeout:     timeout,
+		Temperature: temperature,
+		adapter:     adapter,
+	}
 }

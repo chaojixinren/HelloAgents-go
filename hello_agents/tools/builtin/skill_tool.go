@@ -106,7 +106,11 @@ func (t *SkillTool) Run(parameters map[string]any) (resp tools.ToolResponse) {
 		var castOK bool
 		args, castOK = raw.(string)
 		if !castOK {
-			panic(fmt.Sprintf("replace() argument 2 must be str, not %T", raw))
+			return tools.Error(
+				fmt.Sprintf("args 参数必须是字符串类型，实际为 %T", raw),
+				tools.ToolErrorCodeInvalidParam,
+				map[string]any{"params_input": parameters},
+			)
 		}
 	}
 
