@@ -112,12 +112,11 @@ func (l *HelloAgentsLLM) StreamInvoke(messages []map[string]any, kwargs map[stri
 	temperature, hasTemperature := callKwargs["temperature"]
 	if hasTemperature {
 		delete(callKwargs, "temperature")
-	} else {
-		temperature = nil
 	}
 
-	adapterKwargs := map[string]any{
-		"temperature": temperature,
+	adapterKwargs := map[string]any{}
+	if hasTemperature {
+		adapterKwargs["temperature"] = temperature
 	}
 
 	if l.MaxTokens != nil {
