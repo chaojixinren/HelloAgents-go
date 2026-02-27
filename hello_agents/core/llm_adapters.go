@@ -817,13 +817,12 @@ func (a *GeminiAdapter) StreamInvoke(messages []map[string]any, kwargs map[strin
 			errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: %v", err))
 			return
 		}
+		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			data, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
 			errCh <- NewHelloAgentsException(fmt.Sprintf("Gemini API流式调用失败: http %d: %s", resp.StatusCode, string(data)))
 			return
 		}
-		defer resp.Body.Close()
 
 		usage := map[string]int{}
 		err = parseSSE(resp.Body, func(_ string, data string) error {

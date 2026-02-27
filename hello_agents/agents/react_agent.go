@@ -444,24 +444,6 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any, hooks .
 				"max_steps": a.MaxSteps,
 			})
 
-			fullResponse, err := streamLLMResponse(a.LLM, messages, kwargs, func(chunk string) {
-				out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
-					"chunk": chunk,
-					"step":  currentStep,
-				})
-			})
-			if err != nil {
-				a.emitHook(core.AgentError, activeHooks.OnError, map[string]any{
-					"error": err.Error(),
-					"step":  currentStep,
-				})
-				out <- core.NewAgentEvent(core.AgentError, a.Name, map[string]any{
-					"error": err.Error(),
-					"step":  currentStep,
-				})
-				break
-			}
-
 			response, err := a.LLM.InvokeWithTools(messages, toolSchemas, "auto", kwargs)
 			if err != nil {
 				a.emitHook(core.AgentError, activeHooks.OnError, map[string]any{
@@ -476,11 +458,14 @@ func (a *ReActAgent) ArunStream(inputText string, kwargs map[string]any, hooks .
 			}
 
 			content, toolCalls := extractToolCallsAndContent(response)
+			if content != "" {
+				out <- core.NewAgentEvent(core.LLMChunk, a.Name, map[string]any{
+					"chunk": content,
+					"step":  currentStep,
+				})
+			}
 			if len(toolCalls) == 0 {
 				finalAnswer = content
-				if finalAnswer == "" {
-					finalAnswer = fullResponse
-				}
 				if finalAnswer == "" {
 					finalAnswer = "抱歉，我无法回答这个问题。"
 				}

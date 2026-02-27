@@ -53,7 +53,7 @@ func (p *Planner) Plan(question string, kwargs map[string]any) ([]string, error)
 		kwargs,
 	)
 	if err != nil {
-		return []string{}, nil
+		return []string{}, err
 	}
 
 	_, toolCalls := extractToolCallsAndContent(response)
