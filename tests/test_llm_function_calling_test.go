@@ -103,7 +103,7 @@ func TestNewHelloAgentsLLMIgnoresProviderKwargLikePython(t *testing.T) {
 	}
 }
 
-func TestStreamInvokePassesNilTemperatureByDefaultLikePython(t *testing.T) {
+func TestStreamInvokeOmitsTemperatureWhenNotProvided(t *testing.T) {
 	adapter := &captureStreamAdapter{}
 	llm := core.NewLLMFromAdapter("model-x", "", "", 0, 0.9, adapter)
 
@@ -116,11 +116,8 @@ func TestStreamInvokePassesNilTemperatureByDefaultLikePython(t *testing.T) {
 		}
 	}
 
-	if _, ok := adapter.lastKwargs["temperature"]; !ok {
-		t.Fatalf("temperature key missing, want explicit nil like python stream_invoke")
-	}
-	if adapter.lastKwargs["temperature"] != nil {
-		t.Fatalf("temperature = %#v, want nil", adapter.lastKwargs["temperature"])
+	if _, ok := adapter.lastKwargs["temperature"]; ok {
+		t.Fatalf("temperature should be omitted when not explicitly provided, got %#v", adapter.lastKwargs["temperature"])
 	}
 	if _, ok := adapter.lastKwargs["max_tokens"]; ok {
 		t.Fatalf("max_tokens should be omitted when llm.max_tokens is nil")

@@ -25,7 +25,9 @@ func NewCalculatorTool() *CalculatorTool {
 			Required:    true,
 		},
 	}
-	return &CalculatorTool{BaseTool: base}
+	t := &CalculatorTool{BaseTool: base}
+	t.BaseTool.SetRunImpl(t.Run)
+	return t
 }
 
 func (t *CalculatorTool) Run(parameters map[string]any) tools.ToolResponse {
