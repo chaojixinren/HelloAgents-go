@@ -51,3 +51,7 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.log
+
+# 生成的 AGENTS.md 文档
+/AGENTS.md
+hello_agents/**/AGENTS.md
