@@ -1,0 +1,81 @@
+name: ✨ Feature Request
+description: Suggest a new capability or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please describe what you want and why.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this feature solve? "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Be as specific as you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches you have considered.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core / LLM adapters
+        - Agents (Simple/ReAct/Reflection/PlanSolve)
+        - Tools / Built-in tools
+        - Context engineering
+        - Observability / Logging
+        - Skills
+        - Session persistence
+        - Streaming (SSE)
+        - CLI (cmd/helloagents)
+        - Documentation
+        - CI / Build
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: python-parity
+    attributes:
+      label: Does this exist in the Python version?
+      description: HelloAgents-Go aims for parity with the Python original.
+      options:
+        - "Yes — exists in Python, should be ported"
+        - "No — a new Go-only capability"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, links, related issues, etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
