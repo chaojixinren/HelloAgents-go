@@ -4,8 +4,12 @@
 
 > 🤖 Production-Grade Multi-Agent Framework (Go Implementation) - 16 core capabilities including Tool Response Protocol, Context Engineering, Session Persistence, Sub-Agent Mechanism, and more
 
+[![CI](https://github.com/xiaoyulox/HelloAgents-go/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaoyulox/HelloAgents-go/actions/workflows/ci.yml)
+[![Release](https://github.com/xiaoyulox/HelloAgents-go/actions/workflows/release.yml/badge.svg)](https://github.com/xiaoyulox/HelloAgents-go/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/xiaoyulox/HelloAgents-go.svg)](https://github.com/xiaoyulox/HelloAgents-go/releases)
 [![Go 1.22+](https://img.shields.io/badge/go-1.22+-00ADD8.svg)](https://golang.org/dl/)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 HelloAgents-Go is a faithful Go reimplementation of the [HelloAgents Python version](https://github.com/jjyaoao/HelloAgents), a production-grade multi-agent framework built on the native OpenAI API. It integrates 16 core capabilities including Tool Response Protocol (ToolResponse), Context Engineering (HistoryManager/TokenCounter), Session Persistence (SessionStore), Sub-Agent Mechanism (TaskTool), Optimistic Locking (File Editing), Circuit Breaker (CircuitBreaker), Skills Externalization, TodoWrite Progress Management, DevLog Decision Recording, Streaming Output (SSE), Async Lifecycle, Observability (TraceLogger), Logging System (Four Paradigms), LLM/Agent Base Class Refactoring, providing comprehensive engineering support for building complex agent applications.
 

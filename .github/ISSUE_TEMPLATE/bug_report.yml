@@ -1,0 +1,109 @@
+name: 🐛 Bug Report
+description: Report something that is not working as expected
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill in the fields below.
+        For security vulnerabilities, do **not** open a public issue — see [SECURITY.md](../SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: HelloAgents-Go version
+      placeholder: "1.0.0 (run `helloagents version`)"
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      placeholder: "go1.22.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: llm-provider
+    attributes:
+      label: LLM provider
+      description: Which adapter were you using?
+      options:
+        - OpenAI-compatible (OpenAI / DeepSeek / Qwen / Kimi / GLM)
+        - Anthropic (Claude)
+        - Google Gemini
+        - Local (vLLM / Ollama / SGLang)
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. Include the exact error message if any.
+      placeholder: "When I run X, I expected Y but got Z..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal, self-contained steps to reproduce the issue.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal code sample
+      description: Paste a short Go snippet that reproduces the issue. Redact secrets!
+      render: go
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: Output of `go test -v`, panic stack trace, or trace log. Redact API keys!
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I have redacted all secrets (API keys, credentials) from the content above
+          required: true
