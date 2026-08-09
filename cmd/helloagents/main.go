@@ -19,7 +19,7 @@ func main() {
 	cfg := core.FromEnv()
 
 	if len(os.Args) < 2 {
-		printUsage(cfg)
+		printUsage()
 		return
 	}
 
@@ -37,15 +37,15 @@ func main() {
 	case "chat":
 		chatREPL(cfg)
 	case "help", "-h", "--help":
-		printUsage(cfg)
+		printUsage()
 	default:
 		fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", os.Args[1])
-		printUsage(cfg)
+		printUsage()
 		os.Exit(1)
 	}
 }
 
-func printUsage(cfg core.Config) {
+func printUsage() {
 	fmt.Printf("HelloAgents-go %s\n\n", ha.Version)
 	fmt.Println("用法: helloagents <command> [args]")
 	fmt.Println()
@@ -169,7 +169,7 @@ func buildAgent(cfg core.Config) (*agents.ReActAgent, error) {
 	// Thought/Finish workflow prompt.
 	agent, err := agents.NewReActAgent("assistant", llm, "", &cfg, registry, 15)
 	if err != nil {
-		return nil, fmt.Errorf("Agent 创建失败: %w", err)
+		return nil, fmt.Errorf("创建 agent 失败: %w", err)
 	}
 	return agent, nil
 }

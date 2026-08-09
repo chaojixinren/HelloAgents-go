@@ -184,7 +184,7 @@ func (p *DuckDuckGoProvider) Search(query string, num int) ([]SearchResult, erro
 	params.Set("no_redirect", "1")
 	params.Set("skip_disambig", "1")
 
-	req, err := http.NewRequest("GET", base+"?"+params.Encode(), nil)
+	req, err := http.NewRequest("GET", base+"?"+params.Encode(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("构造请求失败: %w", err)
 	}
