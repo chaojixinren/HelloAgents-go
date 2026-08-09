@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	ha "helloagents-go/hello_agents"
+	"helloagents-go/hello_agents/agents"
 	"helloagents-go/hello_agents/core"
 	"helloagents-go/hello_agents/skills"
+	"helloagents-go/hello_agents/tools"
+	"helloagents-go/hello_agents/tools/builtin"
 )
 
 func main() {
@@ -27,6 +32,10 @@ func main() {
 		listSkills(cfg)
 	case "config":
 		showConfig(cfg)
+	case "run":
+		runTaskCommand(cfg, os.Args[2:])
+	case "chat":
+		chatREPL(cfg)
 	case "help", "-h", "--help":
 		printUsage(cfg)
 	default:
@@ -38,14 +47,21 @@ func main() {
 
 func printUsage(cfg core.Config) {
 	fmt.Printf("HelloAgents-go %s\n\n", ha.Version)
-	fmt.Println("用法: helloagents <command>")
+	fmt.Println("用法: helloagents <command> [args]")
 	fmt.Println()
 	fmt.Println("命令:")
-	fmt.Println("  doctor   检查环境配置")
-	fmt.Println("  version  显示版本号")
-	fmt.Println("  skills   列出可用技能")
-	fmt.Println("  config   显示当前配置")
-	fmt.Println("  help     显示此帮助信息")
+	fmt.Println("  run \"任务\"   一次性执行任务并打印结果")
+	fmt.Println("  chat         进入交互式多轮对话（输入 :quit 退出）")
+	fmt.Println("  doctor       检查环境配置")
+	fmt.Println("  version      显示版本号")
+	fmt.Println("  skills       列出可用技能")
+	fmt.Println("  config       显示当前配置")
+	fmt.Println("  help         显示此帮助信息")
+	fmt.Println()
+	fmt.Println("示例:")
+	fmt.Println("  helloagents run \"分析当前目录结构并生成报告\"")
+	fmt.Println("  helloagents chat")
+	fmt.Println("  helloagents doctor")
 }
 
 func runDoctor(cfg core.Config) {
@@ -123,4 +139,116 @@ func showConfig(cfg core.Config) {
 		}
 		fmt.Println()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent commands: run & chat
+// ---------------------------------------------------------------------------
+
+// buildAgent constructs a ReActAgent wired with a sensible set of built-in
+// tools (file I/O, calculator, bash, http, web search). The LLM is created
+// from environment variables; an error is returned when credentials are
+// missing so callers can present a friendly message.
+func buildAgent(cfg core.Config) (*agents.ReActAgent, error) {
+	llm, err := core.NewHelloAgentsLLM("", "", "", cfg.Temperature, cfg.MaxTokens, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("LLM 初始化失败: %w（请检查 .env 中的 LLM_MODEL_ID / LLM_API_KEY / LLM_BASE_URL）", err)
+	}
+
+	registry := tools.NewToolRegistry(nil)
+	registry.RegisterTool(builtin.NewReadTool(".", registry), false)
+	registry.RegisterTool(builtin.NewWriteTool("."), false)
+	registry.RegisterTool(builtin.NewEditTool("."), false)
+	registry.RegisterTool(builtin.NewTodoWriteTool(".", "memory/todos"), false)
+	registry.RegisterTool(builtin.NewCalculatorTool(), false)
+	registry.RegisterTool(builtin.NewBashTool(), false)
+	registry.RegisterTool(builtin.NewHTTPTool(), false)
+	registry.RegisterTool(builtin.NewWebSearchTool(), false)
+
+	// An empty systemPrompt lets ReActAgent fall back to its built-in
+	// Thought/Finish workflow prompt.
+	agent, err := agents.NewReActAgent("assistant", llm, "", &cfg, registry, 15)
+	if err != nil {
+		return nil, fmt.Errorf("Agent 创建失败: %w", err)
+	}
+	return agent, nil
+}
+
+// runTaskCommand handles `helloagents run "task description"`.
+func runTaskCommand(cfg core.Config, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "用法: helloagents run \"任务描述\"")
+		fmt.Fprintln(os.Stderr, "示例: helloagents run \"分析当前目录结构并生成报告\"")
+		os.Exit(2)
+	}
+	task := strings.TrimSpace(strings.Join(args, " "))
+	if task == "" {
+		fmt.Fprintln(os.Stderr, "任务描述不能为空")
+		os.Exit(2)
+	}
+
+	agent, err := buildAgent(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("🤖 HelloAgents-go %s\n", ha.Version)
+	fmt.Printf("📋 任务: %s\n\n", task)
+
+	out, err := agent.Run(task, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n❌ 执行失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ 结果:")
+	fmt.Println(out)
+}
+
+// chatREPL handles `helloagents chat` — an interactive multi-turn loop.
+// The agent keeps conversation history across turns. Type :quit (or :q) to
+// exit.
+func chatREPL(cfg core.Config) {
+	agent, err := buildAgent(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "初始化失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("HelloAgents-go %s 交互模式\n", ha.Version)
+	fmt.Println("输入消息与助手对话，输入 :quit（或 :q）退出。")
+	fmt.Println()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	// Allow longer single-line input (256KB) for pasting logs/code.
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+
+	turn := 0
+	for {
+		fmt.Print("你> ")
+		if !scanner.Scan() {
+			fmt.Println()
+			break
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if line == ":quit" || line == ":q" || line == "exit" || line == "quit" {
+			break
+		}
+
+		turn++
+		out, err := agent.Run(line, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "助手> ⚠️ 出错了: %v\n\n", err)
+			continue
+		}
+		fmt.Printf("助手> %s\n\n", out)
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "输入读取错误: %v\n", err)
+	}
+	fmt.Printf("共 %d 轮对话。再见！\n", turn)
 }
