@@ -1,29 +1,44 @@
+version: "2"
+
 run:
-  timeout: 5m
   go: "1.22"
 
 linters:
+  default: none
   enable:
     - errcheck
     - govet
     - staticcheck
     - unused
     - ineffassign
-    - gosimple
     - gocritic
     - misspell
-    - gofmt
-
-linters-settings:
-  errcheck:
-    check-blank: false
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
+    - bodyclose
+  settings:
+    errcheck:
+      check-blank: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - vendor
+      - third_party$
 
 issues:
-  exclude-dirs:
-    - vendor
   max-issues-per-linter: 50
   max-same-issues: 5
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - vendor
+      - third_party$
